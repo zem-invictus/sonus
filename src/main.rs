@@ -1,3 +1,5 @@
+mod spatial_audio;
+
 use bevy::prelude::*;
 
 #[derive(Component)]

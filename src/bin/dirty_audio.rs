@@ -70,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let coeffs = BiquadCoefficients::low_pass(
         cutoff_hz,
         spec.sample_rate as f32,
-        0.7071 // Добротность Баттерворта
+        std::f32::consts::FRAC_1_SQRT_2 // Добротность Баттерворта
     );
 
     // Создаем массив состояний фильтра под количество каналов
