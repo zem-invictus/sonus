@@ -1,6 +1,9 @@
 mod spatial_audio;
 
+use crate::spatial_audio::control::{PlaybackControl, PlaybackRegistration};
 use bevy::prelude::*;
+use std::sync::Mutex;
+use std::sync::mpsc::{channel, Receiver, Sender};
 
 #[derive(Component)]
 struct Position {
@@ -15,7 +18,26 @@ struct Velocity {
 #[derive(Component)]
 struct Name(String);
 
+#[derive(Resource)]
+pub struct AudioPlaybackSender {
+    pub receiver: Sender<PlaybackRegistration>,
+}
+
+#[derive(Resource)]
+pub struct AudioPlaybackReceiver {
+    pub receiver: Mutex<Receiver<PlaybackRegistration>>,
+}
+
+#[derive(Component)]
+pub struct SpatialAudioEmitter {
+    pub playback_id: u64,
+    pub control: Option<PlaybackControl>,
+}
+
+
 fn main() {
+    let (sender, receiver) = channel::<PlaybackRegistration>();
+
     App::new()
         .add_plugins(DefaultPlugins)
         .add_systems(Startup, setup_game)

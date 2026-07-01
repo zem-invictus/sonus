@@ -4,7 +4,7 @@ use std::sync::atomic::Ordering::Relaxed;
 
 #[derive(Clone)]
 pub struct AudioParam {
-    value: Arc<AtomicU32>,
+    pub value: Arc<AtomicU32>,
 }
 
 impl AudioParam {
