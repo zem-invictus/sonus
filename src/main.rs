@@ -25,7 +25,7 @@ struct Name(String);
 #[derive(Component)]
 pub struct SpatialAudioEmitter {
     pub playback_id: u64,
-    pub control: Arc<PlaybackControl>,
+    pub control: PlaybackControl,
 }
 
 fn main() {
@@ -85,10 +85,10 @@ fn trigger_sound(
         let playback_id = *playback_counter;
         *playback_counter += 1;
 
-        let p_control = Arc::new(PlaybackControl {
+        let p_control = PlaybackControl {
             biquad: None,
             reverb: None,
-        });
+        };
 
         let spatial_source = SpatialAudioSource {
             bytes: audio_source.bytes.clone(),
