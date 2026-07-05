@@ -12,7 +12,7 @@ use std::sync::{Arc, mpsc};
 pub struct SpatialAudioSource {
     pub bytes: Arc<[u8]>,
     pub playback_id: u64,
-    pub registration_sender: mpsc::Sender<PlaybackRegistration>,
+    pub control_panel: Arc<PlaybackControl>,
     pub config: HashMap<String, bool>,
 }
 
@@ -35,8 +35,8 @@ impl Decodable for SpatialAudioSource {
         let use_low_pass = self.config.get("low_pass").copied().unwrap_or(false);
 
         let mut control_panel = PlaybackControl {
-            biquad: None,
-            reverb: None,
+            biquad: Arc::new(None),
+            reverb: Arc::new(None),
         };
 
         if use_low_pass {
@@ -61,11 +61,6 @@ impl Decodable for SpatialAudioSource {
                 sample_counter: 0,
             });
         }
-
-        let _ = self.registration_sender.send(PlaybackRegistration {
-            playback_id: self.playback_id,
-            control: control_panel,
-        });
 
         source
     }

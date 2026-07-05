@@ -6,8 +6,8 @@ use bevy::audio::AddAudioSource;
 use bevy::prelude::*;
 use rodio::Source;
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, Sender, channel};
+use std::sync::{Arc, Mutex};
 
 #[derive(Component)]
 struct Position {
@@ -22,39 +22,19 @@ struct Velocity {
 #[derive(Component)]
 struct Name(String);
 
-#[derive(Resource)]
-pub struct AudioPlaybackSender {
-    pub sender: Sender<PlaybackRegistration>,
-}
-
-#[derive(Resource)]
-pub struct AudioPlaybackReceiver {
-    pub receiver: Mutex<Receiver<PlaybackRegistration>>,
-}
-
 #[derive(Component)]
 pub struct SpatialAudioEmitter {
     pub playback_id: u64,
-    pub control: Option<PlaybackControl>,
+    pub control: Arc<PlaybackControl>,
 }
 
 fn main() {
-    let (sender, receiver) = channel::<PlaybackRegistration>();
-
     App::new()
         .add_plugins(DefaultPlugins)
         .add_audio_source::<SpatialAudioSource>()
-        .insert_resource(AudioPlaybackSender { sender })
-        .insert_resource(AudioPlaybackReceiver {
-            receiver: Mutex::new(receiver),
-        })
         .add_systems(Startup, setup_game)
         .add_systems(Update, movement_system)
         .add_systems(Update, log_positions)
-        .add_systems(
-            Update,
-            (trigger_sound, sync_audio_controls.after(trigger_sound)),
-        )
         .run();
 }
 
@@ -89,42 +69,12 @@ fn log_positions(query: Query<(&Name, &Position)>) {
     }
 }
 
-fn sync_audio_controls(
-    receiver: Res<AudioPlaybackReceiver>,
-    mut query: Query<&mut SpatialAudioEmitter>,
-) {
-    if let Ok(receiver_guard) = receiver.receiver.try_lock() {
-        while let Ok(registration) = receiver_guard.try_recv() {
-            let mut matched = false;
-            for mut emitter in query.iter_mut() {
-                if emitter.playback_id == registration.playback_id {
-                    emitter.control = Some(registration.control);
-                    matched = true;
-                    println!(
-                        "Успешно связан аудио-контроллер для звука ID: {}",
-                        registration.playback_id
-                    );
-                    break;
-                }
-            }
-
-            if !matched {
-                println!(
-                    "Внимание: прилетел аудио-контроллер для ID {}, но сущность еще не создана",
-                    registration.playback_id
-                );
-            }
-        }
-    }
-}
-
 fn trigger_sound(
     mut commands: Commands,
     audio_assets: Res<Assets<SpatialAudioSource>>,
     sound_handle: Option<Res<TestSoundHandle>>,
     standard_assets: Res<Assets<AudioSource>>,
     mut spatial_assets: ResMut<Assets<SpatialAudioSource>>,
-    playback_sender: Res<AudioPlaybackSender>,
     mut playback_counter: Local<u64>,
 ) {
     let Some(handle) = sound_handle else {
@@ -135,11 +85,16 @@ fn trigger_sound(
         let playback_id = *playback_counter;
         *playback_counter += 1;
 
+        let p_control = Arc::new(PlaybackControl {
+            biquad: None,
+            reverb: None,
+        });
+
         let spatial_source = SpatialAudioSource {
             bytes: audio_source.bytes.clone(),
             playback_id,
-            registration_sender: playback_sender.sender.clone(),
             config: HashMap::from([("low_pass".to_string(), true)]),
+            control_panel: p_control.clone(),
         };
 
         let spatial_handle = spatial_assets.add(spatial_source);
@@ -147,7 +102,7 @@ fn trigger_sound(
         commands.spawn((
             SpatialAudioEmitter {
                 playback_id,
-                control: None,
+                control: p_control.clone(),
             },
             Transform::from_xyz(5.0, 0.0, 0.0),
             AudioPlayer(spatial_handle),

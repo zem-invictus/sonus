@@ -2,15 +2,15 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 
-#[derive(Clone)]
+
 pub struct AudioParam {
-    pub value: Arc<AtomicU32>,
+    pub value: AtomicU32,
 }
 
 impl AudioParam {
     pub fn new(val: f32) -> Self {
         Self {
-            value: Arc::new(AtomicU32::new(val.to_bits())),
+            value: AtomicU32::new(val.to_bits()),
         }
     }
 
@@ -25,7 +25,6 @@ impl AudioParam {
     }
 }
 
-#[derive(Clone)]
 pub struct BiquadControl {
     pub cutoff_hz: AudioParam,
     pub volume: AudioParam,
@@ -40,7 +39,6 @@ impl BiquadControl {
     }
 }
 
-#[derive(Clone)]
 pub struct ReverbControl {
     pub room_size: AudioParam,
     pub wet_mix: AudioParam,
@@ -56,8 +54,8 @@ impl ReverbControl {
 }
 
 pub struct PlaybackControl {
-    pub biquad: Option<BiquadControl>,
-    pub reverb: Option<ReverbControl>,
+    pub biquad: Arc<Option<BiquadControl>>,
+    pub reverb: Arc<Option<ReverbControl>>,
 }
 
 pub struct PlaybackRegistration {
