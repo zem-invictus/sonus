@@ -25,6 +25,7 @@ impl AudioParam {
     }
 }
 
+
 pub struct BiquadControl {
     pub cutoff_hz: AudioParam,
     pub volume: AudioParam,
@@ -53,9 +54,10 @@ impl ReverbControl {
     }
 }
 
+#[derive(Clone)]
 pub struct PlaybackControl {
-    pub biquad: Arc<Option<BiquadControl>>,
-    pub reverb: Arc<Option<ReverbControl>>,
+    pub biquad: Option<Arc<BiquadControl>>,
+    pub reverb: Option<Arc<ReverbControl>>,
 }
 
 pub struct PlaybackRegistration {

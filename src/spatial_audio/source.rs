@@ -12,14 +12,18 @@ use std::sync::{Arc, mpsc};
 pub struct SpatialAudioSource {
     pub bytes: Arc<[u8]>,
     pub playback_id: u64,
-    pub control_panel: Arc<PlaybackControl>,
+    pub control_panel: PlaybackControl,
     pub config: HashMap<String, bool>,
 }
 
-type BoxedAudioSource = Box<dyn Source<Item = f32> + Send>;
+impl AsRef<[u8]> for SpatialAudioSource {
+    fn as_ref(&self) -> &[u8] {
+        self.bytes.as_ref()
+    }
+}
 
 impl Decodable for SpatialAudioSource {
-    type Decoder = BoxedAudioSource;
+    type Decoder = Decoder<Cursor<SpatialAudioSource>>;
 
     fn decoder(&self) -> Self::Decoder {
         let cursor = Cursor::new(self.bytes.clone());
@@ -35,8 +39,8 @@ impl Decodable for SpatialAudioSource {
         let use_low_pass = self.config.get("low_pass").copied().unwrap_or(false);
 
         let mut control_panel = PlaybackControl {
-            biquad: Arc::new(None),
-            reverb: Arc::new(None),
+            biquad: None,
+            reverb: None,
         };
 
         if use_low_pass {
