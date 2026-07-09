@@ -1,5 +1,10 @@
+use std::f32::consts::FRAC_1_SQRT_2;
+use crate::spatial_audio::control::BiquadControl;
+use crate::spatial_audio::filter::AudioFilter;
+use std::sync::Arc;
+
 #[derive(Debug, Clone, Copy)]
-pub struct BiquadCoefficients {
+struct BiquadCoefficients {
     b0: f32,
     b1: f32,
     b2: f32,
@@ -39,5 +44,33 @@ impl BiquadState {
         self.s1 = coeffs.b1 * input - coeffs.a1 * output + self.s2;
         self.s2 = coeffs.b2 * input - coeffs.a2 * output;
         output
+    }
+}
+
+pub struct BiquadFilter {
+    pub control: Arc<BiquadControl>,
+    pub channel_states: Vec<BiquadState>,
+    pub current_cutoff_hz: f32,
+    pub coeffs: BiquadCoefficients,
+}
+
+impl AudioFilter for BiquadFilter {
+    fn process(&mut self, samples: &mut [f32], channels: u16) {
+        let volume = self.control.volume.get();
+        let channels_count = self.channel_states.len();
+
+        for (i, sample) in samples.iter_mut().enumerate() {
+            let channel = i % channels_count;
+            let input = *sample * volume;
+            *sample = self.channel_states[channel].process_sample(input, &self.coeffs);
+        }
+    }
+
+    fn update(&mut self, sample_rate: u32) {
+        let target_cutoff = self.control.cutoff_hz.get();
+        if (target_cutoff - self.current_cutoff_hz).abs() > 1. {
+            self.current_cutoff_hz = target_cutoff;
+            self.coeffs = BiquadCoefficients::low_pass(target_cutoff, sample_rate as f32, FRAC_1_SQRT_2);
+        }
     }
 }
