@@ -1,6 +1,6 @@
 use super::biquad::{BiquadCoefficients, BiquadState};
 use super::control::{BiquadControl, PlaybackControl, PlaybackRegistration};
-use crate::spatial_audio::filter::BiquadFilter;
+use crate::spatial_audio::filter::{BiquadFilter, FilterType};
 use bevy::audio::Decodable;
 use bevy::prelude::{Asset, TypePath};
 use rodio::{Decoder, Source};
@@ -12,8 +12,7 @@ use std::sync::{Arc, mpsc};
 pub struct SpatialAudioSource {
     pub bytes: Arc<[u8]>,
     pub playback_id: u64,
-    pub control_panel: PlaybackControl,
-    pub config: HashMap<String, bool>,
+    pub control: PlaybackControl,
 }
 
 impl AsRef<[u8]> for SpatialAudioSource {

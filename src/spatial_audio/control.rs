@@ -1,7 +1,15 @@
+use crate::spatial_audio::filter::FilterType;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
 
+#[derive(Clone)]
+pub enum FilterControl {
+    LowPass(Arc<BiquadControl>),
+    HighPass(Arc<BiquadControl>),
+    Reverb(Arc<ReverbControl>),
+}
 
 pub struct AudioParam {
     pub value: AtomicU32,
@@ -24,7 +32,6 @@ impl AudioParam {
         self.value.store(val.to_bits(), Relaxed)
     }
 }
-
 
 pub struct BiquadControl {
     pub cutoff_hz: AudioParam,
@@ -56,8 +63,7 @@ impl ReverbControl {
 
 #[derive(Clone)]
 pub struct PlaybackControl {
-    pub biquad: Option<Arc<BiquadControl>>,
-    pub reverb: Option<Arc<ReverbControl>>,
+    pub filters: HashMap<FilterType, FilterControl>,
 }
 
 pub struct PlaybackRegistration {
