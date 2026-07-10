@@ -1,14 +1,13 @@
-use crate::spatial_audio::filter::FilterType;
+use std::any::TypeId;
+use crate::spatial_audio::filter::{AudioFilter, FilterType};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
+use crate::spatial_audio::biquad::BiquadFilter;
 
-#[derive(Clone)]
-pub enum FilterControl {
-    LowPass(Arc<BiquadControl>),
-    HighPass(Arc<BiquadControl>),
-    Reverb(Arc<ReverbControl>),
+pub trait FilterControl : Send + Sync + 'static {
+    fn build_filter(&self, channels: u16, sample_rate: u32) -> Box<dyn AudioFilter>;
 }
 
 pub struct AudioParam {
@@ -47,6 +46,12 @@ impl BiquadControl {
     }
 }
 
+impl FilterControl for BiquadControl {
+    fn build_filter(&self, channels: u16, sample_rate: u32) -> Box<dyn AudioFilter> {
+        Box::new(BiquadFilter::new)
+    }
+}
+
 pub struct ReverbControl {
     pub room_size: AudioParam,
     pub wet_mix: AudioParam,
@@ -63,10 +68,11 @@ impl ReverbControl {
 
 #[derive(Clone)]
 pub struct PlaybackControl {
-    pub filters: HashMap<FilterType, FilterControl>,
+    pub filters: HashMap<TypeId, FilterControl>,
 }
 
-pub struct PlaybackRegistration {
-    pub playback_id: u64,
-    pub control: PlaybackControl,
+impl PlaybackControl {
+    pub fn get<T: FilterControl>(&self) -> Option<T> {
+
+    }
 }

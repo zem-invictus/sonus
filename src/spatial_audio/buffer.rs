@@ -1,3 +1,4 @@
+//! Module containing all buffer functionality for audio processing
 use std::num::NonZero;
 
 pub struct BlockBuffer {

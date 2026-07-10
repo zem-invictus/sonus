@@ -4,7 +4,7 @@ use crate::spatial_audio::filter::AudioFilter;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy)]
-struct BiquadCoefficients {
+pub(crate) struct BiquadCoefficients {
     b0: f32,
     b1: f32,
     b2: f32,

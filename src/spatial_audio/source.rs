@@ -1,18 +1,26 @@
-use super::biquad::{BiquadCoefficients, BiquadState};
-use super::control::{BiquadControl, PlaybackControl, PlaybackRegistration};
-use crate::spatial_audio::filter::{BiquadFilter, FilterType};
+use super::biquad::{BiquadCoefficients, BiquadFilter, BiquadState};
+use super::control::{BiquadControl, FilterControl, PlaybackControl, PlaybackRegistration};
+use crate::spatial_audio::buffer::BlockBuffer;
+use crate::spatial_audio::filter::{AudioFilter, FilterConfig, FilterType};
 use bevy::audio::Decodable;
 use bevy::prelude::{Asset, TypePath};
 use rodio::{Decoder, Source};
 use std::collections::HashMap;
 use std::io::Cursor;
-use std::sync::{Arc, mpsc};
+use std::num::NonZero;
+use std::sync::{mpsc, Arc};
 
 #[derive(Asset, TypePath, Clone)]
 pub struct SpatialAudioSource {
     pub bytes: Arc<[u8]>,
     pub playback_id: u64,
     pub control: PlaybackControl,
+}
+
+impl SpatialAudioSource {
+    pub fn add_filter(config: Box<dyn FilterConfig>) {
+
+    }
 }
 
 impl AsRef<[u8]> for SpatialAudioSource {
@@ -22,49 +30,109 @@ impl AsRef<[u8]> for SpatialAudioSource {
 }
 
 impl Decodable for SpatialAudioSource {
-    type Decoder = Decoder<Cursor<SpatialAudioSource>>;
+    type Decoder = SpatialAudioChain<Decoder<Cursor<Arc<[u8]>>>>;
 
     fn decoder(&self) -> Self::Decoder {
         let cursor = Cursor::new(self.bytes.clone());
-
         let raw_decoder = Decoder::new(cursor).expect("Failed to create decoder!");
-
         let channels = raw_decoder.channels().get();
-
         let sample_rate = raw_decoder.sample_rate().get();
 
-        let mut source: BoxedAudioSource = Box::new(raw_decoder);
+        let mut filters: Vec<Box<dyn AudioFilter>> = Vec::new();
 
-        let use_low_pass = self.config.get("low_pass").copied().unwrap_or(false);
 
-        let mut control_panel = PlaybackControl {
-            biquad: None,
-            reverb: None,
-        };
-
-        if use_low_pass {
-            let control = BiquadControl::new(20000.0, 1.0);
-            control_panel.biquad = Some(control.clone());
-            let initial_cutoff = 20000.0;
-            let coeffs = BiquadCoefficients::low_pass(
-                initial_cutoff,
-                sample_rate as f32,
-                std::f32::consts::FRAC_1_SQRT_2,
-            );
-            let channel_states = vec![BiquadState::default(); channels as usize];
-
-            source = Box::new(BiquadFilter {
-                inner: source,
-                control,
-                channels,
-                channel_states,
-                sample_rate,
-                current_cutoff_hz: initial_cutoff,
-                coeffs,
-                sample_counter: 0,
-            });
+        if let Some(FilterControl::LowPass(control)) = self.control.filters.get(&FilterType::LowPass) {
+            filters.push(Box::new(BiquadFilter {
+                control: control.clone(),
+                channel_states: vec![BiquadState::default(); channels as usize],
+                current_cutoff_hz: control.cutoff_hz.get(),
+                coeffs: BiquadCoefficients::low_pass(
+                    control.cutoff_hz.get(),
+                    sample_rate as f32,
+                    std::f32::consts::FRAC_1_SQRT_2,
+                ),
+            }));
         }
 
-        source
+        SpatialAudioChain::new(raw_decoder, filters)
+    }
+}
+
+pub struct SpatialAudioChain<I: Source> {
+    input: I,
+    sample_rate: NonZero<u32>,
+    buffer: BlockBuffer,
+    filters: Vec<Box<dyn AudioFilter>>,
+}
+
+impl<I: Source> SpatialAudioChain<I> {
+    pub fn new(input: I, filters: Vec<Box<dyn AudioFilter>>) -> Self {
+        let channels = NonZero::new(input.channels().get()).expect("Number of audio source channels is 0!");
+        let sample_rate = NonZero::new(input.sample_rate().get()).expect("Sample rate of audio source is 0!");
+        let buffer = BlockBuffer::new(128, channels);
+
+        Self {
+            input,
+            sample_rate,
+            buffer,
+            filters,
+        }
+    }
+    fn fill_and_process_block(&mut self) -> Option<()> {
+        self.buffer.clear();
+
+        let total_samples = self.buffer.capacity();
+
+        for _ in 0..total_samples {
+            if let Some(sample) = self.input.next() {
+                self.buffer.push(sample);
+            } else {
+                break;
+            }
+        }
+
+        if self.buffer.is_empty() {
+            return None;
+        }
+
+        for filter in &mut self.filters {
+            filter.update(self.sample_rate.get());
+        }
+
+        let channels = self.buffer.channels();
+
+        for filter in &mut self.filters {
+            filter.process(self.buffer.as_mut_slice(), channels.get());
+        }
+        Some(())
+    }
+}
+impl<I: Source> Iterator for SpatialAudioChain<I> {
+    type Item = f32;
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.buffer.is_exhausted() {
+            self.buffer.clear();
+            self.fill_and_process_block()?;
+        }
+
+        let sample = self.buffer.pop();
+        Some(sample)
+    }
+}
+
+impl<I: Source> Source for SpatialAudioChain<I> {
+
+    fn current_span_len(&self) -> Option<usize> {
+        self.input.current_span_len()
+    }
+    fn channels(&self) -> NonZero<u16> {
+        self.buffer.channels()
+    }
+    fn sample_rate(&self) -> NonZero<u32> {
+        self.sample_rate
+    }
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        self.input.total_duration()
     }
 }
