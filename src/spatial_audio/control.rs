@@ -46,7 +46,21 @@ impl BiquadControl {
     }
 }
 
-impl FilterControl for BiquadControl {
+pub struct LowPassControl {
+    pub cutoff_hz: AudioParam,
+    pub volume: AudioParam,
+}
+
+impl LowPassControl {
+    pub fn new(cutoff_hz: f32, volume: f32) -> Self {
+        Self {
+            cutoff_hz: AudioParam::new(cutoff_hz),
+            volume: AudioParam::new(volume),
+        }
+    }
+}
+
+impl FilterControl for LowPassControl {
     fn build_filter(&self, channels: u16, sample_rate: u32) -> Box<dyn AudioFilter> {
         Box::new(BiquadFilter::new)
     }

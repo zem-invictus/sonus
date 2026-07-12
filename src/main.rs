@@ -6,9 +6,6 @@ use bevy::audio::AddAudioSource;
 use bevy::prelude::*;
 use rodio::Source;
 use std::collections::HashMap;
-use std::sync::mpsc::{Receiver, Sender, channel};
-use std::sync::{Arc, Mutex};
-
 #[derive(Component)]
 struct Position {
     x: f32,
