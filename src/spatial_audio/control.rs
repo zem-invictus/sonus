@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering::Relaxed;
 use crate::spatial_audio::biquad::BiquadFilter;
 
 pub trait FilterControl : Send + Sync + 'static {
-    fn build_filter(&self, channels: u16, sample_rate: u32) -> Box<dyn AudioFilter>;
+    fn build_filter(self: Arc<Self>, channels: u16, sample_rate: u32) -> Box<dyn AudioFilter>;
 }
 
 pub struct AudioParam {
@@ -61,8 +61,8 @@ impl LowPassControl {
 }
 
 impl FilterControl for LowPassControl {
-    fn build_filter(&self, channels: u16, sample_rate: u32) -> Box<dyn AudioFilter> {
-        Box::new(BiquadFilter::new)
+    fn build_filter(self: Arc<Self>, channels: u16, sample_rate: u32) -> Box<dyn AudioFilter> {
+        Box::new(BiquadFilter::new(self, channels, sample_rate))
     }
 }
 
@@ -82,11 +82,13 @@ impl ReverbControl {
 
 #[derive(Clone)]
 pub struct PlaybackControl {
-    pub filters: HashMap<TypeId, FilterControl>,
+    pub filters: HashMap<TypeId, Arc<dyn FilterControl>>,
 }
 
 impl PlaybackControl {
-    pub fn get<T: FilterControl>(&self) -> Option<T> {
-
+    pub fn new() -> Self {
+        Self {
+            filters: HashMap::new(),
+        }
     }
 }

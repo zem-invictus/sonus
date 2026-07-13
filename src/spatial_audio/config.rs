@@ -7,14 +7,14 @@ pub trait FilterConfig: 'static {
 
 #[derive(Clone, Copy)]
 pub struct LowPassConfig {
-    cutoff: f32,
-    resonance: f32,
+    pub(crate) cutoff: f32,
+    pub(crate) volume: f32,
 }
 
 impl FilterConfig for LowPassConfig {
     type Control = LowPassControl;
 
     fn build_control(self) -> Self::Control {
-        LowPassControl::new(self.cutoff, self.resonance)
+        Self::Control::new(self.cutoff, self.volume)
     }
 }

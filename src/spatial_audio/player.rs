@@ -5,7 +5,6 @@ use crate::spatial_audio::source::SpatialAudioSource;
 #[derive(Component)]
 pub struct SpatialAudioPlayer {
     source: Handle<SpatialAudioSource>,
-    control: PlaybackControl,
 
     pub volume: f32,
     pub pitch: f32,
