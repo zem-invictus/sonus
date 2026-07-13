@@ -6,3 +6,4 @@ pub mod plugin;
 pub mod player;
 pub mod buffer;
 pub mod config;
+pub mod occlusion;
