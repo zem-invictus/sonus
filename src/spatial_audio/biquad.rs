@@ -1,7 +1,12 @@
-use std::f32::consts::FRAC_1_SQRT_2;
-use crate::spatial_audio::control::{BiquadControl, FilterControl, LowPassControl};
-use crate::spatial_audio::filter::AudioFilter;
+use crate::spatial_audio::control::BiquadControl;
 use std::sync::Arc;
+
+pub enum BiquadMode {
+    LowPass,
+    HighPass,
+    BandPass,
+    PeakingEq { gain_db: f32 },
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct BiquadCoefficients {
@@ -47,32 +52,34 @@ impl BiquadState {
     }
 }
 
-pub struct BiquadFilter<C: FilterControl> {
-    pub control: Arc<C>,
+pub struct BiquadFilter {
+    pub control: Arc<BiquadControl>,
     pub channel_states: Vec<BiquadState>,
-    pub current_cutoff_hz: f32,
+    pub cutoff_hz: f32,
     pub coeffs: BiquadCoefficients,
 }
 
-impl BiquadFilter<LowPassControl> {
-    pub fn new(control: Arc<LowPassControl>, channels: u16, sample_rate: u32) -> Self {
-        let current_cutoff_hz = control.cutoff_hz.get();
-        let coeffs = BiquadCoefficients::low_pass(
-            current_cutoff_hz as f32,
-            sample_rate as f32,
-            FRAC_1_SQRT_2,
-        );
-        BiquadFilter {
+impl BiquadFilter {
+    pub fn new(control: Arc<BiquadControl>, channels: u16, sample_rate: f32) -> Self {
+        let cutoff_hz = control.cutoff_hz.get();
+        let q = control.q.get();
+
+        let coeffs = match control.mode {
+            BiquadMode::LowPass => BiquadCoefficients::low_pass(cutoff_hz, sample_rate, q),
+            BiquadMode::HighPass => BiquadCoefficients::default(),
+            BiquadMode::BandPass => BiquadCoefficients::default(),
+            BiquadMode::PeakingEq { .. } => BiquadCoefficients::default(),
+        };
+
+        Self {
             control,
             channel_states: vec![BiquadState::default(); channels as usize],
-            current_cutoff_hz: current_cutoff_hz as f32,
+            cutoff_hz,
             coeffs,
         }
     }
-}
 
-impl AudioFilter for BiquadFilter<LowPassControl> {
-    fn process(&mut self, samples: &mut [f32]) {
+    pub fn process(&mut self, samples: &mut [f32]) {
         let channels_count = self.channel_states.len();
 
         for (i, sample) in samples.iter_mut().enumerate() {
@@ -82,11 +89,19 @@ impl AudioFilter for BiquadFilter<LowPassControl> {
         }
     }
 
-    fn update(&mut self, sample_rate: u32) {
+    pub fn update(&mut self, sample_rate: u32) {
         let target_cutoff = self.control.cutoff_hz.get();
-        if (target_cutoff - self.current_cutoff_hz).abs() > 1. {
-            self.current_cutoff_hz = target_cutoff;
-            self.coeffs = BiquadCoefficients::low_pass(target_cutoff, sample_rate as f32, FRAC_1_SQRT_2);
+        if (target_cutoff - self.cutoff_hz).abs() > 1. {
+            let target_q = self.control.q.get();
+            self.cutoff_hz = target_cutoff;
+            self.coeffs = match self.control.mode {
+                BiquadMode::LowPass => {
+                    BiquadCoefficients::low_pass(target_cutoff, sample_rate as f32, target_q)
+                }
+                BiquadMode::HighPass => BiquadCoefficients::default(),
+                BiquadMode::BandPass => BiquadCoefficients::default(),
+                BiquadMode::PeakingEq { .. } => BiquadCoefficients::default(),
+            };
         }
     }
 }
