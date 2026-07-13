@@ -11,6 +11,6 @@ pub enum FilterType {
 }
 
 pub trait AudioFilter: Send + Sync {
-    fn process(&mut self, samples: &mut [f32], channels: u16);
+    fn process(&mut self, samples: &mut [f32]);
     fn update(&mut self, sample_rate: u32);
 }

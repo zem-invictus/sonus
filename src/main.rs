@@ -1,11 +1,13 @@
 mod spatial_audio;
 
-use crate::spatial_audio::control::{PlaybackControl, PlaybackRegistration};
+use crate::spatial_audio::config::LowPassConfig;
+use crate::spatial_audio::control::PlaybackControl;
 use crate::spatial_audio::source::SpatialAudioSource;
 use bevy::audio::AddAudioSource;
 use bevy::prelude::*;
 use rodio::Source;
 use std::collections::HashMap;
+
 #[derive(Component)]
 struct Position {
     x: f32,
@@ -82,25 +84,19 @@ fn trigger_sound(
         let playback_id = *playback_counter;
         *playback_counter += 1;
 
-        let p_control = PlaybackControl {
-            biquad: None,
-            reverb: None,
-        };
-
         let spatial_source = SpatialAudioSource {
             bytes: audio_source.bytes.clone(),
             playback_id,
-            config: HashMap::from([("low_pass".to_string(), true)]),
-            control_panel: p_control.clone(),
-        };
+            control: PlaybackControl::new(),
+        }
+        .add_filter(LowPassConfig {
+            cutoff: 1000.0,
+            volume: 1.0,
+        });
 
         let spatial_handle = spatial_assets.add(spatial_source);
 
         commands.spawn((
-            SpatialAudioEmitter {
-                playback_id,
-                control: p_control.clone(),
-            },
             Transform::from_xyz(5.0, 0.0, 0.0),
             AudioPlayer(spatial_handle),
         ));

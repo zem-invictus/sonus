@@ -1,5 +1,5 @@
 use std::f32::consts::FRAC_1_SQRT_2;
-use crate::spatial_audio::control::{BiquadControl, FilterControl};
+use crate::spatial_audio::control::{BiquadControl, FilterControl, LowPassControl};
 use crate::spatial_audio::filter::AudioFilter;
 use std::sync::Arc;
 
@@ -54,31 +54,30 @@ pub struct BiquadFilter<C: FilterControl> {
     pub coeffs: BiquadCoefficients,
 }
 
-impl<C: FilterControl> BiquadFilter<C> {
-    pub fn new_lowpass_filter(control: Arc<C>, channels: u16, sample_rate: u32, cutoff_hz: u32) -> Self {
-        let current_cutoff_hz = cutoff_hz.get();
+impl BiquadFilter<LowPassControl> {
+    pub fn new(control: Arc<LowPassControl>, channels: u16, sample_rate: u32) -> Self {
+        let current_cutoff_hz = control.cutoff_hz.get();
         let coeffs = BiquadCoefficients::low_pass(
-            current_cutoff_hz,
+            current_cutoff_hz as f32,
             sample_rate as f32,
             FRAC_1_SQRT_2,
         );
         BiquadFilter {
             control,
             channel_states: vec![BiquadState::default(); channels as usize],
-            current_cutoff_hz,
+            current_cutoff_hz: current_cutoff_hz as f32,
             coeffs,
         }
     }
 }
 
-impl<C: FilterControl> AudioFilter for BiquadFilter<C> {
-    fn process(&mut self, samples: &mut [f32], channels: u16) {
-        let volume = self.control.volume.get();
+impl AudioFilter for BiquadFilter<LowPassControl> {
+    fn process(&mut self, samples: &mut [f32]) {
         let channels_count = self.channel_states.len();
 
         for (i, sample) in samples.iter_mut().enumerate() {
             let channel = i % channels_count;
-            let input = *sample * volume;
+            let input = *sample;
             *sample = self.channel_states[channel].process_sample(input, &self.coeffs);
         }
     }
