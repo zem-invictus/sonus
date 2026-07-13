@@ -6,5 +6,5 @@ edition = "2024"
 [dependencies]
 bevy = { version = "0.19.0", }
 hound = "3.5.1"
-rodio = { version = "0.22.2", default-features = false }
+rodio = { version = "0.22.2", default-features = false, features = ["wav"] }
 ringbuf = "0.5.0"
