@@ -1,48 +1,60 @@
-use std::any::TypeId;
-use super::biquad::{BiquadCoefficients, BiquadFilter, BiquadState};
-use super::control::{BiquadControl, FilterControl, PlaybackControl};
+use super::biquad::{BiquadFilter, BiquadMode};
+use super::control::{BiquadControl, PlaybackControl};
 use crate::spatial_audio::buffer::BlockBuffer;
-use crate::spatial_audio::config::FilterConfig;
-use crate::spatial_audio::filter::{AudioFilter, FilterType};
+use crate::spatial_audio::config::AudioParam;
 use bevy::audio::Decodable;
 use bevy::prelude::{Asset, TypePath};
+use rodio::source::Repeat;
 use rodio::{Decoder, Source};
-use std::collections::HashMap;
+use std::f32::consts::FRAC_1_SQRT_2;
 use std::io::Cursor;
 use std::num::NonZero;
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
 #[derive(Asset, TypePath, Clone)]
 pub struct SpatialAudioSource {
     pub bytes: Arc<[u8]>,
     pub playback_id: u64,
-    pub control: PlaybackControl,
+    pub control: Arc<PlaybackControl>,
 }
 
 impl SpatialAudioSource {
-    pub fn add_filter<C: FilterConfig>(mut self, config: C) -> Self {
-        let control = Arc::new(config.build_control());
-        self.control.filters.insert(TypeId::of::<C::Control>(), control);
+    pub fn new(bytes: Arc<[u8]>, playback_id: u64) -> Self {
+        Self {
+            bytes,
+            playback_id,
+            control: Arc::new(PlaybackControl::new()),
+        }
+    }
+    pub fn with_lowpass_filter(mut self, cutoff_hz: f32) -> Self {
+        if let Some(pl_control) = Arc::get_mut(&mut self.control) {
+            pl_control.low_pass = Some(Arc::new(BiquadControl {
+                mode: BiquadMode::LowPass,
+                cutoff_hz: AudioParam::new(cutoff_hz),
+                q: AudioParam::new(FRAC_1_SQRT_2),
+                gain_db: None,
+            }))
+        }
         self
     }
 }
 
 impl Decodable for SpatialAudioSource {
-    type Decoder = SpatialAudioChain<Decoder<Cursor<Arc<[u8]>>>>;
+    type Decoder = SpatialAudioChain<Repeat<Decoder<Cursor<Arc<[u8]>>>>>;
 
     fn decoder(&self) -> Self::Decoder {
         let cursor = Cursor::new(self.bytes.clone());
-        let raw_decoder = Decoder::new(cursor).expect("Failed to create decoder!");
+        let raw_decoder = Decoder::new(cursor)
+            .expect("Failed to create decoder!")
+            .repeat_infinite();
         let channels = raw_decoder.channels().get();
         let sample_rate = raw_decoder.sample_rate().get();
 
-        let mut filters: Vec<Box<dyn AudioFilter>> = Vec::new();
+        let low_pass = self.control.low_pass.as_ref().map(|lpf_control| {
+            BiquadFilter::new(lpf_control.clone(), channels, sample_rate as f32)
+        });
 
-        for control in self.control.filters.values() {
-            filters.push(control.clone().build_filter(channels, sample_rate));
-        }
-
-        SpatialAudioChain::new(raw_decoder, filters)
+        SpatialAudioChain::new(raw_decoder, self.control.clone(), low_pass)
     }
 }
 
@@ -50,11 +62,13 @@ pub struct SpatialAudioChain<I: Source> {
     input: I,
     sample_rate: NonZero<u32>,
     buffer: BlockBuffer,
-    filters: Vec<Box<dyn AudioFilter>>,
+    control: Arc<PlaybackControl>,
+
+    low_pass: Option<BiquadFilter>,
 }
 
 impl<I: Source> SpatialAudioChain<I> {
-    pub fn new(input: I, filters: Vec<Box<dyn AudioFilter>>) -> Self {
+    pub fn new(input: I, control: Arc<PlaybackControl>, low_pass: Option<BiquadFilter>) -> Self {
         let channels =
             NonZero::new(input.channels().get()).expect("Number of audio source channels is 0!");
         let sample_rate =
@@ -65,7 +79,8 @@ impl<I: Source> SpatialAudioChain<I> {
             input,
             sample_rate,
             buffer,
-            filters,
+            control,
+            low_pass,
         }
     }
     fn fill_and_process_block(&mut self) -> Option<()> {
@@ -85,15 +100,19 @@ impl<I: Source> SpatialAudioChain<I> {
             return None;
         }
 
-        for filter in &mut self.filters {
-            filter.update(self.sample_rate.get());
+        let sample_rate = self.sample_rate.get();
+
+        if let Some(lpf) = &mut self.low_pass {
+            lpf.update(sample_rate);
+            lpf.process(self.buffer.as_mut_slice());
         }
 
-        let channels = self.buffer.channels();
+        let volume = self.control.volume.get();
 
-        for filter in &mut self.filters {
-            filter.process(self.buffer.as_mut_slice());
+        for sample in self.buffer.as_mut_slice() {
+            *sample *= volume;
         }
+
         Some(())
     }
 }

@@ -1,20 +1,24 @@
-use crate::spatial_audio::control::{BiquadControl, FilterControl, LowPassControl};
+use std::sync::atomic::AtomicU32;
+use std::sync::atomic::Ordering::Relaxed;
 
-pub trait FilterConfig: 'static {
-    type Control: FilterControl;
-    fn build_control(self) -> Self::Control;
+pub struct AudioParam {
+    pub value: AtomicU32,
 }
 
-#[derive(Clone, Copy)]
-pub struct LowPassConfig {
-    pub(crate) cutoff: f32,
-    pub(crate) volume: f32,
-}
+impl AudioParam {
+    pub fn new(val: f32) -> Self {
+        Self {
+            value: AtomicU32::new(val.to_bits()),
+        }
+    }
 
-impl FilterConfig for LowPassConfig {
-    type Control = LowPassControl;
+    #[inline]
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.value.load(Relaxed))
+    }
 
-    fn build_control(self) -> Self::Control {
-        Self::Control::new(self.cutoff, self.volume)
+    #[inline]
+    pub fn set(&self, val: f32) {
+        self.value.store(val.to_bits(), Relaxed)
     }
 }
