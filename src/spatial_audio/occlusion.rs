@@ -1,10 +1,6 @@
 use std::mem::swap;
 use bevy::prelude::Vec2;
 
-/// Проверяет, пересекает ли 2D-отрезок от `p1` до `p2` прямоугольник (AABB),
-/// заданный минимальным (`min`) и максимальным (`max`) углами.
-/// 
-/// Метод плит (Slab Method) в параметрическом пространстве t ∈ [0, 1].
 pub fn line_segment_intersects_aabb(p1: Vec2, p2: Vec2, min: Vec2, max: Vec2) -> bool {
     let d = p2 - p1;
 
