@@ -5,3 +5,6 @@ pub mod plugin;
 pub mod buffer;
 pub mod config;
 pub mod occlusion;
+pub mod spawn;
+pub mod sink;
+pub mod emitter;

@@ -2,9 +2,10 @@ mod spatial_audio;
 
 use crate::spatial_audio::control::PlaybackControl;
 use crate::spatial_audio::plugin::SpatialAudioPlugin;
-use crate::spatial_audio::source::SpatialAudioSource;
+use crate::spatial_audio::source::SonusSource;
 use bevy::prelude::*;
 use std::sync::Arc;
+use crate::spatial_audio::spawn::SpawnSound;
 
 #[derive(Component)]
 struct Position {
@@ -21,7 +22,6 @@ struct Name(String);
 
 #[derive(Component)]
 pub struct SpatialAudioController {
-    pub playback_id: u64,
     pub control: Arc<PlaybackControl>,
 }
 
@@ -37,7 +37,7 @@ fn main() {
     App::new()
         .add_plugins((DefaultPlugins, SpatialAudioPlugin))
         .add_systems(Startup, setup_game)
-        .add_systems(Update, trigger_sound)
+        // .add_systems(Update, trigger_sound)
         .add_systems(Update, movement_system)
         .run();
 }
@@ -54,7 +54,10 @@ fn setup_game(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let handle: Handle<AudioSource> = asset_server.load("input.wav");
-    commands.insert_resource(TestSoundHandle { handle });
+    commands.trigger(SpawnSound {
+        position: Vec3::new(-5.0, 1.0, 1.0),
+        sound: handle,
+    });
 
     // 1. Направление света
     commands.spawn((
@@ -140,8 +143,7 @@ fn trigger_sound(
     mut commands: Commands,
     sound_handle: Option<Res<TestSoundHandle>>,
     standard_assets: Res<Assets<AudioSource>>,
-    mut spatial_assets: ResMut<Assets<SpatialAudioSource>>,
-    mut playback_counter: Local<u64>,
+    mut spatial_assets: ResMut<Assets<SonusSource>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
@@ -150,14 +152,10 @@ fn trigger_sound(
     };
 
     if let Some(audio_source) = standard_assets.get(&handle.handle) {
-        let playback_id = *playback_counter;
-        *playback_counter += 1;
-
-        let spatial_source = SpatialAudioSource::new(audio_source.bytes.clone(), playback_id)
-            .with_lowpass_filter(400.0);
-
-        let p_control = spatial_source.control.clone();
-        let spatial_handle = spatial_assets.add(spatial_source);
+        let (spatial_source_handle, spatial_control) =
+            SonusSource::from_audio_source(audio_source)
+                .with_lowpass_filter(400.0)
+                .prepare(spatial_assets.as_mut());
 
         commands.spawn((
             Mesh3d(meshes.add(Sphere::new(0.5))),
@@ -166,17 +164,9 @@ fn trigger_sound(
                 ..default()
             })),
             Transform::from_xyz(-5.0, 1.0, 0.0),
-            AudioPlayer(spatial_handle),
-            SpatialAudioController {
-                playback_id,
-                control: p_control,
-            },
+            AudioPlayer(spatial_source_handle),
         ));
 
         commands.remove_resource::<TestSoundHandle>();
-        println!(
-            "Звук успешно сконвертирован в Spatial и отправлен на воспроизведение. ID: {}",
-            playback_id
-        );
     }
 }

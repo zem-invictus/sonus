@@ -2,7 +2,7 @@ use super::biquad::{BiquadFilter, BiquadMode};
 use super::control::{BiquadControl, PlaybackControl};
 use crate::spatial_audio::buffer::BlockBuffer;
 use crate::spatial_audio::config::AudioParam;
-use bevy::audio::Decodable;
+use bevy::audio::{AudioSource, Decodable};
 use bevy::prelude::{Asset, TypePath};
 use rodio::source::Repeat;
 use rodio::{Decoder, Source};
@@ -10,21 +10,30 @@ use std::f32::consts::FRAC_1_SQRT_2;
 use std::io::Cursor;
 use std::num::NonZero;
 use std::sync::Arc;
+use bevy::asset::{Assets, Handle};
 
 #[derive(Asset, TypePath, Clone)]
-pub struct SpatialAudioSource {
+pub struct SonusSource {
     pub bytes: Arc<[u8]>,
-    pub playback_id: u64,
     pub control: Arc<PlaybackControl>,
 }
 
-impl SpatialAudioSource {
-    pub fn new(bytes: Arc<[u8]>, playback_id: u64) -> Self {
+impl SonusSource {
+    pub fn new(bytes: Arc<[u8]>) -> Self {
         Self {
             bytes,
-            playback_id,
             control: Arc::new(PlaybackControl::new()),
         }
+    }
+
+    pub fn from_audio_source(source: &AudioSource) -> Self {
+        Self::new(source.bytes.clone())
+    }
+
+    pub fn prepare(self, assets: &mut Assets<Self>) -> (Handle<Self>, Arc<PlaybackControl>) {
+        let control = self.control.clone();
+        let handle = assets.add(self);
+        (handle, control)
     }
     pub fn with_lowpass_filter(mut self, cutoff_hz: f32) -> Self {
         if let Some(pl_control) = Arc::get_mut(&mut self.control) {
@@ -39,7 +48,7 @@ impl SpatialAudioSource {
     }
 }
 
-impl Decodable for SpatialAudioSource {
+impl Decodable for SonusSource {
     type Decoder = SpatialAudioChain<Repeat<Decoder<Cursor<Arc<[u8]>>>>>;
 
     fn decoder(&self) -> Self::Decoder {
