@@ -1,5 +1,7 @@
-use crate::spatial_audio::config::{OcclusionControl, SonusControl};
-use crate::spatial_audio::dsp::{BlockBuffer, OcclusionAudioChain};
+//! Rodio source adapter and audio stream processing pipeline.
+
+use crate::sonus::config::{OcclusionControl, SonusControl};
+use crate::sonus::dsp::{BlockBuffer, OcclusionAudioChain};
 use bevy::audio::Decodable;
 use bevy::prelude::{Asset, TypePath};
 use rodio::source::Repeat;
@@ -8,6 +10,7 @@ use std::io::Cursor;
 use std::num::NonZero;
 use std::sync::Arc;
 
+/// Decodable audio asset wrapping raw audio bytes and control handles.
 #[derive(Asset, TypePath, Clone)]
 pub struct SonusSource {
     pub bytes: Arc<[u8]>,
@@ -15,6 +18,7 @@ pub struct SonusSource {
 }
 
 impl SonusSource {
+    /// Creates a new `SonusSource` asset.
     pub fn new(bytes: Arc<[u8]>, control: Arc<SonusControl>) -> Self {
         Self { bytes, control }
     }
@@ -41,6 +45,7 @@ impl Decodable for SonusSource {
     }
 }
 
+/// Custom Rodio `Source` executing block-based spatial audio processing on the audio thread.
 pub struct SpatialAudioChain<I: Source> {
     input: I,
     sample_rate: NonZero<u32>,
@@ -50,6 +55,7 @@ pub struct SpatialAudioChain<I: Source> {
 }
 
 impl<I: Source> SpatialAudioChain<I> {
+    /// Creates a new spatial audio processing chain with a 512-sample buffer.
     pub fn new(input: I, control: Arc<SonusControl>) -> Self {
         let channels =
             NonZero::new(input.channels().get()).expect("Number of audio source channels is 0!");
