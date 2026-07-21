@@ -1,50 +1,23 @@
-use super::biquad::{BiquadFilter, BiquadMode};
-use super::control::{BiquadControl, PlaybackControl};
+use super::biquad::OcclusionAudioChain;
+use super::control::{SonusControl, OcclusionControl};
 use crate::spatial_audio::buffer::BlockBuffer;
-use crate::spatial_audio::config::AudioParam;
-use bevy::audio::{AudioSource, Decodable};
+use bevy::audio::Decodable;
 use bevy::prelude::{Asset, TypePath};
 use rodio::source::Repeat;
 use rodio::{Decoder, Source};
-use std::f32::consts::FRAC_1_SQRT_2;
 use std::io::Cursor;
 use std::num::NonZero;
 use std::sync::Arc;
-use bevy::asset::{Assets, Handle};
 
 #[derive(Asset, TypePath, Clone)]
 pub struct SonusSource {
     pub bytes: Arc<[u8]>,
-    pub control: Arc<PlaybackControl>,
+    pub control: Arc<SonusControl>,
 }
 
 impl SonusSource {
-    pub fn new(bytes: Arc<[u8]>) -> Self {
-        Self {
-            bytes,
-            control: Arc::new(PlaybackControl::new()),
-        }
-    }
-
-    pub fn from_audio_source(source: &AudioSource) -> Self {
-        Self::new(source.bytes.clone())
-    }
-
-    pub fn prepare(self, assets: &mut Assets<Self>) -> (Handle<Self>, Arc<PlaybackControl>) {
-        let control = self.control.clone();
-        let handle = assets.add(self);
-        (handle, control)
-    }
-    pub fn with_lowpass_filter(mut self, cutoff_hz: f32) -> Self {
-        if let Some(pl_control) = Arc::get_mut(&mut self.control) {
-            pl_control.low_pass = Some(Arc::new(BiquadControl {
-                mode: BiquadMode::LowPass,
-                cutoff_hz: AudioParam::new(cutoff_hz),
-                q: AudioParam::new(FRAC_1_SQRT_2),
-                gain_db: None,
-            }))
-        }
-        self
+    pub fn new(bytes: Arc<[u8]>, control: Arc<SonusControl>) -> Self {
+        Self { bytes, control }
     }
 }
 
@@ -59,11 +32,13 @@ impl Decodable for SonusSource {
         let channels = raw_decoder.channels().get();
         let sample_rate = raw_decoder.sample_rate().get();
 
-        let low_pass = self.control.low_pass.as_ref().map(|lpf_control| {
-            BiquadFilter::new(lpf_control.clone(), channels, sample_rate as f32)
-        });
+        let mut chain = SpatialAudioChain::new(raw_decoder, self.control.clone());
 
-        SpatialAudioChain::new(raw_decoder, self.control.clone(), low_pass)
+        if let Some(occlusion_control) = self.control.occlusion_control.clone() {
+            chain.add_occlusion_chain(channels, sample_rate as f32, occlusion_control);
+        }
+
+        chain
     }
 }
 
@@ -71,13 +46,13 @@ pub struct SpatialAudioChain<I: Source> {
     input: I,
     sample_rate: NonZero<u32>,
     buffer: BlockBuffer,
-    control: Arc<PlaybackControl>,
+    control: Arc<SonusControl>,
 
-    low_pass: Option<BiquadFilter>,
+    occlusion_chain: Option<OcclusionAudioChain>,
 }
 
 impl<I: Source> SpatialAudioChain<I> {
-    pub fn new(input: I, control: Arc<PlaybackControl>, low_pass: Option<BiquadFilter>) -> Self {
+    pub fn new(input: I, control: Arc<SonusControl>) -> Self {
         let channels =
             NonZero::new(input.channels().get()).expect("Number of audio source channels is 0!");
         let sample_rate =
@@ -89,8 +64,15 @@ impl<I: Source> SpatialAudioChain<I> {
             sample_rate,
             buffer,
             control,
-            low_pass,
+            occlusion_chain: None,
         }
+    }
+
+    fn add_occlusion_chain(&mut self, channels: u16,
+                           sample_rate: f32,
+                           control: Arc<OcclusionControl>,) -> &mut Self {
+        self.occlusion_chain = Some(OcclusionAudioChain::new(channels, sample_rate, control));
+        self
     }
     fn fill_and_process_block(&mut self) -> Option<()> {
         self.buffer.clear();
@@ -108,20 +90,12 @@ impl<I: Source> SpatialAudioChain<I> {
         if self.buffer.is_empty() {
             return None;
         }
+        
 
-        let sample_rate = self.sample_rate.get();
-
-        if let Some(lpf) = &mut self.low_pass {
-            lpf.update(sample_rate);
-            lpf.process(self.buffer.as_mut_slice());
+        if let Some(occlusion_chain) = &mut self.occlusion_chain {
+            occlusion_chain.update();
+            occlusion_chain.process(self.buffer.as_mut_slice());
         }
-
-        let volume = self.control.volume.get();
-
-        for sample in self.buffer.as_mut_slice() {
-            *sample *= volume;
-        }
-
         Some(())
     }
 }

@@ -1,60 +1,32 @@
-use crate::SpatialAudioController;
+use crate::spatial_audio::emitter::{SonusEmitter, SonusSourceInput};
 use crate::spatial_audio::source::SonusSource;
 use bevy::prelude::*;
 
-#[derive(Event)]
-pub struct SpawnSound {
-    pub position: Vec3,
-    pub sound: Handle<AudioSource>,
-}
-
-#[derive(Component)]
-pub(crate) struct SpatialAudioIntent {
-    source: Handle<AudioSource>,
-    lowpass_filter: f32,
-}
-
-pub(crate) fn on_spawn_sound(
-    trigger: On<SpawnSound>,
+pub(crate) fn sonus_audio_system(
     mut commands: Commands,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
+    mut query: Query<(Entity, &mut SonusEmitter), Without<AudioPlayer<SonusSource>>>,
+    audio_assets: Res<Assets<AudioSource>>,
+    mut sonus_assets: ResMut<Assets<SonusSource>>,
 ) {
-    commands.spawn((
-        Mesh3d(meshes.add(Sphere::new(0.5))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.2, 0.2, 0.8),
-            ..default()
-        })),
-        Transform::from_translation(trigger.position),
-        SpatialAudioIntent {
-            source: trigger.sound.clone(),
-            lowpass_filter: 400.0,
-        },
-    ));
-}
+    for (entity, mut emitter) in &mut query {
+        let audio_handle = match &emitter.source {
+            SonusSourceInput::Path(path) => {
+                let handle = asset_server.load(path);
+                emitter.update_handle_status(handle.clone());
+                handle
+            }
+            SonusSourceInput::AudioHandle(handle) => handle.clone(),
+        };
 
-pub(crate) fn process_spatial_audio_intents(
-    mut commands: Commands,
-    query: Query<(Entity, &SpatialAudioIntent)>,
-    assets: Res<Assets<AudioSource>>,
-    mut spatial_assets: ResMut<Assets<SonusSource>>,
-) {
-    for (entity, intent) in &query {
-        let Some(source) = assets.get(&intent.source) else {
+        let Some(audio_source) = audio_assets.get(&audio_handle) else {
             continue;
         };
-        let (spatial_handle, spatial_control) = SonusSource::from_audio_source(source)
-            .with_lowpass_filter(intent.lowpass_filter)
-            .prepare(spatial_assets.as_mut());
-        commands
-            .entity(entity)
-            .insert((
-                AudioPlayer(spatial_handle),
-                SpatialAudioController {
-                    control: spatial_control,
-                },
-            ))
-            .remove::<SpatialAudioIntent>();
+
+        let sonus_source = SonusSource::new(audio_source.bytes.clone(), emitter.control.clone());
+        let sonus_handle = sonus_assets.add(sonus_source);
+
+        // Вставляем только компонент воспроизведения звука
+        commands.entity(entity).insert(AudioPlayer(sonus_handle));
     }
 }

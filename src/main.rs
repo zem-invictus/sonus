@@ -1,11 +1,9 @@
 mod spatial_audio;
 
-use crate::spatial_audio::control::PlaybackControl;
+use crate::spatial_audio::emitter::SonusEmitter;
+use crate::spatial_audio::occlusion::{AcousticMaterial, AudioListener, Wall};
 use crate::spatial_audio::plugin::SpatialAudioPlugin;
-use crate::spatial_audio::source::SonusSource;
 use bevy::prelude::*;
-use std::sync::Arc;
-use crate::spatial_audio::spawn::SpawnSound;
 
 #[derive(Component)]
 struct Position {
@@ -20,58 +18,42 @@ struct Velocity {
 #[derive(Component)]
 struct Name(String);
 
-#[derive(Component)]
-pub struct SpatialAudioController {
-    pub control: Arc<PlaybackControl>,
-}
-
-#[derive(Component)]
-struct AudioListener;
-
-#[derive(Component)]
-struct Wall {
-    half_extents: Vec3,
-}
-
 fn main() {
     App::new()
         .add_plugins((DefaultPlugins, SpatialAudioPlugin))
         .add_systems(Startup, setup_game)
-        // .add_systems(Update, trigger_sound)
-        .add_systems(Update, movement_system)
+        .add_systems(Update, (movement_system, debug_visualize_occlusion))
         .run();
-}
-
-#[derive(Resource)]
-pub struct TestSoundHandle {
-    handle: Handle<AudioSource>,
 }
 
 fn setup_game(
     mut commands: Commands,
-    asset_server: Res<AssetServer>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let handle: Handle<AudioSource> = asset_server.load("input.wav");
-    commands.trigger(SpawnSound {
-        position: Vec3::new(-5.0, 1.0, 1.0),
-        sound: handle,
-    });
+    commands.spawn((
+        Mesh3d(meshes.add(Sphere::new(0.5))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.2, 0.2, 0.8), // Синий
+            ..default()
+        })),
+        Transform::from_xyz(-5.0, 1.0, 0.0),
+        SonusEmitter::new("input.wav").with_occlusion(),
+    ));
 
-    // 1. Направление света
+    // 2. Направление света
     commands.spawn((
         DirectionalLight::default(),
         Transform::from_xyz(4.0, 10.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
     ));
 
-    // 2. 3D Камера с видом сверху-сбоку
+    // 3. 3D Камера с видом сверху-сбоку
     commands.spawn((
         Camera3d::default(),
         Transform::from_xyz(0.0, 12.0, 12.0).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
     ));
 
-    // 3. Зеленая земля (пол)
+    // 4. Зеленая земля (пол)
     commands.spawn((
         Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
@@ -81,7 +63,7 @@ fn setup_game(
         Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 
-    // 4. Препятствие (красная стена) посередине
+    // 5. Препятствие (красная стена) с компонентом акустического материала
     commands.spawn((
         Mesh3d(meshes.add(Cuboid::new(2.0, 3.0, 10.0))),
         MeshMaterial3d(materials.add(StandardMaterial {
@@ -92,9 +74,13 @@ fn setup_game(
         Wall {
             half_extents: Vec3::new(1.0, 1.5, 5.0),
         },
+        AcousticMaterial {
+            lowpass_cutoff_hz: 20000.0,   // Глухая стена, оставляет только глухие басы (LPF срез 300 Гц)
+            highpass_cutoff_hz: 1000.0,  // Немного приглушает суб-бас (HPF срез 100 Гц)
+        },
     ));
 
-    // 5. Игрок-Слушатель (белая сфера)
+    // 6. Игрок-Слушатель (белая сфера)
     commands.spawn((
         Mesh3d(meshes.add(Sphere::new(0.5))),
         MeshMaterial3d(materials.add(StandardMaterial {
@@ -134,39 +120,37 @@ fn movement_system(
             let offset = direction.normalize() * speed * time.delta_secs();
             transform.translation += offset;
             position.x = transform.translation.x;
-            position.y = transform.translation.z; // position.y хранит координату Z плоскости в логах
+            position.y = transform.translation.z;
         }
     }
 }
 
-fn trigger_sound(
-    mut commands: Commands,
-    sound_handle: Option<Res<TestSoundHandle>>,
-    standard_assets: Res<Assets<AudioSource>>,
-    mut spatial_assets: ResMut<Assets<SonusSource>>,
-    mut meshes: ResMut<Assets<Mesh>>,
+/// Система визуальной отладки: красит игрока в желтый цвет, 
+/// если LPF срез любого активного эмиттера упал ниже 19000 Гц (звук окклюдирован)
+fn debug_visualize_occlusion(
+    emitter_query: Query<&SonusEmitter>,
+    listener_query: Query<&MeshMaterial3d<StandardMaterial>, With<AudioListener>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let Some(handle) = sound_handle else {
+    let Some(material_handle) = listener_query.iter().next() else {
         return;
     };
 
-    if let Some(audio_source) = standard_assets.get(&handle.handle) {
-        let (spatial_source_handle, spatial_control) =
-            SonusSource::from_audio_source(audio_source)
-                .with_lowpass_filter(400.0)
-                .prepare(spatial_assets.as_mut());
+    let mut is_any_occluded = false;
+    for emitter in emitter_query.iter() {
+        if let Some(occlusion_control) = &emitter.control.occlusion_control {
+            if occlusion_control.lowpass_hz.get() < 19000.0 {
+                is_any_occluded = true;
+                break;
+            }
+        }
+    }
 
-        commands.spawn((
-            Mesh3d(meshes.add(Sphere::new(0.5))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(0.2, 0.2, 0.8), // Синий
-                ..default()
-            })),
-            Transform::from_xyz(-5.0, 1.0, 0.0),
-            AudioPlayer(spatial_source_handle),
-        ));
-
-        commands.remove_resource::<TestSoundHandle>();
+    if let Some(mut mat) = materials.get_mut(&material_handle.0) {
+        if is_any_occluded {
+            mat.base_color = Color::srgb(1.0, 1.0, 0.0); // Желтый
+        } else {
+            mat.base_color = Color::srgb(1.0, 1.0, 1.0); // Белый
+        }
     }
 }
