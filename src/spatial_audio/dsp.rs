@@ -52,6 +52,7 @@ impl BiquadCoefficients {
             a2: (1.0 - alpha) / a0,
         }
     }
+
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -71,9 +72,12 @@ impl BiquadState {
 }
 
 pub struct BiquadFilter {
-    pub(crate) frequency_hz: f32,
+    frequency_hz: f32,
+    sample_rate: f32,
+    mode: BiquadMode,
     pub channel_states: Vec<BiquadState>,
-    pub coeffs: BiquadCoefficients,
+    coeffs: BiquadCoefficients,
+    target_coeffs: BiquadCoefficients,
 }
 
 impl BiquadFilter {
@@ -83,25 +87,83 @@ impl BiquadFilter {
             BiquadMode::HighPass => 20.0,
         };
         let coeffs = match mode {
-            BiquadMode::LowPass => BiquadCoefficients::low_pass(20000.0, sample_rate, FRAC_1_SQRT_2),
+            BiquadMode::LowPass => {
+                BiquadCoefficients::low_pass(20000.0, sample_rate, FRAC_1_SQRT_2)
+            }
             BiquadMode::HighPass => BiquadCoefficients::high_pass(20.0, sample_rate, FRAC_1_SQRT_2),
         };
 
         Self {
             frequency_hz,
+            sample_rate,
+            mode,
             channel_states: vec![BiquadState::default(); channels as usize],
             coeffs,
+            target_coeffs: coeffs,
         }
     }
 
-    pub fn process(&mut self, samples: &mut [f32]) {
-        let channels_count = self.channel_states.len();
+    #[inline]
+    pub fn frequency_hz(&self) -> f32 {
+        self.frequency_hz
+    }
 
-        for (i, sample) in samples.iter_mut().enumerate() {
-            let channel = i % channels_count;
-            let input = *sample;
-            *sample = self.channel_states[channel].process_sample(input, &self.coeffs);
+    pub fn set_target(&mut self, target: BiquadCoefficients) {
+        self.target_coeffs = target;
+    }
+
+    pub fn update_cutoff(&mut self, target_hz: f32, speed_factor: f32) {
+        if (target_hz - self.frequency_hz).abs() > 0.1 {
+            self.frequency_hz += (target_hz - self.frequency_hz) * speed_factor;
+        } else {
+            self.frequency_hz = target_hz;
         }
+
+        let target_coeffs = match self.mode {
+            BiquadMode::LowPass => {
+                BiquadCoefficients::low_pass(self.frequency_hz, self.sample_rate, FRAC_1_SQRT_2)
+            }
+            BiquadMode::HighPass => {
+                BiquadCoefficients::high_pass(self.frequency_hz, self.sample_rate, FRAC_1_SQRT_2)
+            }
+        };
+        self.set_target(target_coeffs);
+    }
+
+    pub fn process(&mut self, buffer: &mut BlockBuffer) {
+        let frames_count = buffer.frames_count();
+        if frames_count == 0 {
+            return;
+        }
+
+        let inv_frames = if frames_count > 1 {
+            1.0 / (frames_count - 1) as f32
+        } else {
+            1.0
+        };
+
+        let b0_step = (self.target_coeffs.b0 - self.coeffs.b0) * inv_frames;
+        let b1_step = (self.target_coeffs.b1 - self.coeffs.b1) * inv_frames;
+        let b2_step = (self.target_coeffs.b2 - self.coeffs.b2) * inv_frames;
+        let a1_step = (self.target_coeffs.a1 - self.coeffs.a1) * inv_frames;
+        let a2_step = (self.target_coeffs.a2 - self.coeffs.a2) * inv_frames;
+
+        let mut current_coeffs = self.coeffs;
+
+        for frame_chunk in buffer.frames_mut() {
+            for (channel, sample) in frame_chunk.iter_mut().enumerate() {
+                let input = *sample;
+                *sample = self.channel_states[channel].process_sample(input, &current_coeffs);
+            }
+
+            current_coeffs.b0 += b0_step;
+            current_coeffs.b1 += b1_step;
+            current_coeffs.b2 += b2_step;
+            current_coeffs.a1 += a1_step;
+            current_coeffs.a2 += a2_step;
+        }
+
+        self.coeffs = self.target_coeffs;
     }
 }
 
@@ -109,48 +171,29 @@ pub(crate) struct OcclusionAudioChain {
     lowpass_filter: BiquadFilter,
     highpass_filter: BiquadFilter,
     control: Arc<OcclusionControl>,
-    sample_rate: f32,
 }
 
 impl OcclusionAudioChain {
-    pub(crate) fn new(
-        channels: u16,
-        sample_rate: f32,
-        control: Arc<OcclusionControl>,
-    ) -> Self {
+    pub(crate) fn new(channels: u16, sample_rate: f32, control: Arc<OcclusionControl>) -> Self {
         Self {
             lowpass_filter: BiquadFilter::new(channels, sample_rate, BiquadMode::LowPass),
             highpass_filter: BiquadFilter::new(channels, sample_rate, BiquadMode::HighPass),
             control,
-            sample_rate,
         }
     }
 
     pub(crate) fn update(&mut self) {
-        // 1. Плавно подтягиваем частоту Low-Pass фильтра
         let target_lpf = self.control.lowpass_hz.get();
-        let current_lpf = self.lowpass_filter.frequency_hz;
-        let next_lpf = current_lpf + (target_lpf - current_lpf) * 0.15;
+        let speed_lpf = if target_lpf < self.lowpass_filter.frequency_hz() { 0.25 } else { 0.15 };
+        self.lowpass_filter.update_cutoff(target_lpf, speed_lpf);
 
-        if (next_lpf - current_lpf).abs() > 0.1 {
-            self.lowpass_filter.frequency_hz = next_lpf;
-            self.lowpass_filter.coeffs = BiquadCoefficients::low_pass(next_lpf, self.sample_rate, FRAC_1_SQRT_2);
-        }
-
-        // 2. Плавно подтягиваем частоту High-Pass фильтра
         let target_hpf = self.control.highpass_hz.get();
-        let current_hpf = self.highpass_filter.frequency_hz;
-        let next_hpf = current_hpf + (target_hpf - current_hpf) * 0.15;
-
-        if (next_hpf - current_hpf).abs() > 0.1 {
-            self.highpass_filter.frequency_hz = next_hpf;
-            self.highpass_filter.coeffs = BiquadCoefficients::high_pass(next_hpf, self.sample_rate, FRAC_1_SQRT_2);
-        }
+        self.highpass_filter.update_cutoff(target_hpf, 0.15);
     }
 
-    pub fn process(&mut self, samples: &mut [f32]) {
-        self.lowpass_filter.process(samples);
-        self.highpass_filter.process(samples);
+    pub fn process(&mut self, buffer: &mut BlockBuffer) {
+        self.lowpass_filter.process(buffer);
+        self.highpass_filter.process(buffer);
     }
 }
 
@@ -169,6 +212,16 @@ impl BlockBuffer {
             block_size,
             channels,
         }
+    }
+
+    #[inline]
+    pub fn frames_count(&self) -> usize {
+        self.data.len() / self.channels.get() as usize
+    }
+
+    #[inline]
+    pub fn frames_mut(&mut self) -> impl Iterator<Item = &mut [f32]> {
+        self.data.chunks_exact_mut(self.channels.get() as usize)
     }
 
     #[inline]
@@ -214,7 +267,14 @@ impl BlockBuffer {
     }
 
     #[inline]
-    pub fn as_mut_slice(&mut self) -> &mut [f32] {
-        &mut self.data
+    pub fn fill_from_iter(&mut self, iter: &mut impl Iterator<Item = f32>) {
+        let cap = self.capacity();
+        for _ in 0..cap {
+            if let Some(sample) = iter.next() {
+                self.push(sample);
+            } else {
+                break;
+            }
+        }
     }
 }
