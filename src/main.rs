@@ -1,6 +1,7 @@
 mod spatial_audio;
 
 use crate::spatial_audio::{AcousticMaterial, AudioListener, SonusEmitter, SpatialAudioPlugin};
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -16,11 +17,22 @@ struct Velocity {
 #[derive(Component)]
 struct Name(String);
 
+#[derive(Component)]
+struct FpsText;
+
 fn main() {
     App::new()
-        .add_plugins((DefaultPlugins, SpatialAudioPlugin))
+        .add_plugins((
+            DefaultPlugins,
+            SpatialAudioPlugin,
+            FrameTimeDiagnosticsPlugin::default(),
+            LogDiagnosticsPlugin::default(),
+        ))
         .add_systems(Startup, setup_game)
-        .add_systems(Update, (movement_system, debug_visualize_occlusion))
+        .add_systems(
+            Update,
+            (movement_system, debug_visualize_occlusion, fps_update_system),
+        )
         .run();
 }
 
@@ -88,6 +100,23 @@ fn setup_game(
         Name("Player 1".to_string()),
         AudioListener,
     ));
+
+    // 7. FPS Текст UI на экране
+    commands.spawn((
+        Text::new("FPS: --"),
+        TextFont {
+            font_size: 20.0.into(),
+            ..default()
+        },
+        TextColor(Color::srgb(0.0, 1.0, 0.0)),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(10.0),
+            left: Val::Px(10.0),
+            ..default()
+        },
+        FpsText,
+    ));
 }
 
 fn movement_system(
@@ -146,6 +175,20 @@ fn debug_visualize_occlusion(
             mat.base_color = Color::srgb(1.0, 1.0, 0.0); // Желтый
         } else {
             mat.base_color = Color::srgb(1.0, 1.0, 1.0); // Белый
+        }
+    }
+}
+
+/// Система обновления значения FPS на UI-тексте
+fn fps_update_system(
+    diagnostics: Res<DiagnosticsStore>,
+    mut query: Query<&mut Text, With<FpsText>>,
+) {
+    for mut text in &mut query {
+        if let Some(fps) = diagnostics.get(&FrameTimeDiagnosticsPlugin::FPS) {
+            if let Some(value) = fps.smoothed() {
+                **text = format!("FPS: {:.0}", value);
+            }
         }
     }
 }
