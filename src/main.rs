@@ -2,7 +2,9 @@ mod sonus;
 
 use crate::sonus::{AcousticMaterial, AudioListener, SonusEmitter, SpatialAudioPlugin};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
+use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
+use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
 
 #[derive(Component)]
 struct Position {
@@ -34,7 +36,13 @@ fn main() {
         .add_systems(Startup, setup_game)
         .add_systems(
             Update,
-            (movement_system, debug_visualize_occlusion, fps_update_system),
+            (
+                movement_system,
+                mouse_look_system,
+                cursor_toggle_system,
+                debug_visualize_occlusion,
+                fps_update_system,
+            ),
         )
         .run();
 }
@@ -43,7 +51,13 @@ fn setup_game(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cursor_options: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
+    if let Ok(mut cursor) = cursor_options.single_mut() {
+        cursor.grab_mode = CursorGrabMode::Locked;
+        cursor.visible = false;
+    }
+
     commands.spawn((
         Mesh3d(meshes.add(Sphere::new(0.5))),
         MeshMaterial3d(materials.add(StandardMaterial {
@@ -57,11 +71,6 @@ fn setup_game(
     commands.spawn((
         DirectionalLight::default(),
         Transform::from_xyz(4.0, 10.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-
-    commands.spawn((
-        Camera3d::default(),
-        Transform::from_xyz(0.0, 12.0, 12.0).looking_at(Vec3::new(0.0, 1.0, 0.0), Vec3::Y),
     ));
 
     commands.spawn((
@@ -94,6 +103,9 @@ fn setup_game(
         Velocity { x: 0.0, y: 0.0 },
         Name("Player 1".to_string()),
         AudioListener,
+    )).with_child((
+        Camera3d::default(),
+        Transform::from_xyz(0.0, 0.3, 0.0).looking_to(Dir3::NEG_Z, Vec3::Y),
     ));
 
     commands.spawn((
@@ -113,32 +125,77 @@ fn setup_game(
     ));
 }
 
+/// Movement system updating player position relative to facing orientation.
 fn movement_system(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     mut query: Query<(&mut Transform, &mut Position), With<AudioListener>>,
     time: Res<Time>,
 ) {
     let mut direction = Vec3::ZERO;
-    if keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp) {
-        direction.z -= 1.0;
-    }
-    if keyboard_input.pressed(KeyCode::KeyS) || keyboard_input.pressed(KeyCode::ArrowDown) {
-        direction.z += 1.0;
-    }
-    if keyboard_input.pressed(KeyCode::KeyA) || keyboard_input.pressed(KeyCode::ArrowLeft) {
-        direction.x -= 1.0;
-    }
-    if keyboard_input.pressed(KeyCode::KeyD) || keyboard_input.pressed(KeyCode::ArrowRight) {
-        direction.x += 1.0;
-    }
 
-    if direction != Vec3::ZERO {
-        let speed = 5.0;
-        for (mut transform, mut position) in query.iter_mut() {
-            let offset = direction.normalize() * speed * time.delta_secs();
+    for (mut transform, mut position) in query.iter_mut() {
+        let forward = transform.forward();
+        let right = transform.right();
+
+        if keyboard_input.pressed(KeyCode::KeyW) || keyboard_input.pressed(KeyCode::ArrowUp) {
+            direction += *forward;
+        }
+        if keyboard_input.pressed(KeyCode::KeyS) || keyboard_input.pressed(KeyCode::ArrowDown) {
+            direction -= *forward;
+        }
+        if keyboard_input.pressed(KeyCode::KeyD) || keyboard_input.pressed(KeyCode::ArrowRight) {
+            direction += *right;
+        }
+        if keyboard_input.pressed(KeyCode::KeyA) || keyboard_input.pressed(KeyCode::ArrowLeft) {
+            direction -= *right;
+        }
+
+        if direction != Vec3::ZERO {
+            let speed = 5.0;
+            let flat_dir = Vec3::new(direction.x, 0.0, direction.z).normalize();
+            let offset = flat_dir * speed * time.delta_secs();
             transform.translation += offset;
             position.x = transform.translation.x;
             position.y = transform.translation.z;
+        }
+    }
+}
+
+/// First-person mouse look system rotating player body (Yaw) and camera pitch.
+fn mouse_look_system(
+    mouse_motion: Res<AccumulatedMouseMotion>,
+    mut player_query: Query<&mut Transform, (With<AudioListener>, Without<Camera3d>)>,
+    mut camera_query: Query<&mut Transform, With<Camera3d>>,
+) {
+    let delta = mouse_motion.delta;
+
+    if delta != Vec2::ZERO {
+        let sensitivity = 0.002;
+
+        for mut transform in &mut player_query {
+            transform.rotate_y(-delta.x * sensitivity);
+        }
+
+        for mut transform in &mut camera_query {
+            transform.rotate_local_x(-delta.y * sensitivity);
+        }
+    }
+}
+
+/// System for toggling mouse cursor lock mode when pressing Escape.
+fn cursor_toggle_system(
+    keyboard_input: Res<ButtonInput<KeyCode>>,
+    mut cursor_options: Query<&mut CursorOptions, With<PrimaryWindow>>,
+) {
+    if keyboard_input.just_pressed(KeyCode::Escape) {
+        if let Ok(mut cursor) = cursor_options.single_mut() {
+            if cursor.grab_mode == CursorGrabMode::Locked {
+                cursor.grab_mode = CursorGrabMode::None;
+                cursor.visible = true;
+            } else {
+                cursor.grab_mode = CursorGrabMode::Locked;
+                cursor.visible = false;
+            }
         }
     }
 }
