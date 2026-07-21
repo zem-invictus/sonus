@@ -1,6 +1,5 @@
-use super::biquad::OcclusionAudioChain;
-use super::control::{SonusControl, OcclusionControl};
-use crate::spatial_audio::buffer::BlockBuffer;
+use crate::spatial_audio::config::{OcclusionControl, SonusControl};
+use crate::spatial_audio::dsp::{BlockBuffer, OcclusionAudioChain};
 use bevy::audio::Decodable;
 use bevy::prelude::{Asset, TypePath};
 use rodio::source::Repeat;
@@ -47,7 +46,6 @@ pub struct SpatialAudioChain<I: Source> {
     sample_rate: NonZero<u32>,
     buffer: BlockBuffer,
     control: Arc<SonusControl>,
-
     occlusion_chain: Option<OcclusionAudioChain>,
 }
 
@@ -68,12 +66,16 @@ impl<I: Source> SpatialAudioChain<I> {
         }
     }
 
-    fn add_occlusion_chain(&mut self, channels: u16,
-                           sample_rate: f32,
-                           control: Arc<OcclusionControl>,) -> &mut Self {
+    fn add_occlusion_chain(
+        &mut self,
+        channels: u16,
+        sample_rate: f32,
+        control: Arc<OcclusionControl>,
+    ) -> &mut Self {
         self.occlusion_chain = Some(OcclusionAudioChain::new(channels, sample_rate, control));
         self
     }
+
     fn fill_and_process_block(&mut self) -> Option<()> {
         self.buffer.clear();
 
@@ -90,7 +92,6 @@ impl<I: Source> SpatialAudioChain<I> {
         if self.buffer.is_empty() {
             return None;
         }
-        
 
         if let Some(occlusion_chain) = &mut self.occlusion_chain {
             occlusion_chain.update();
@@ -99,8 +100,10 @@ impl<I: Source> SpatialAudioChain<I> {
         Some(())
     }
 }
+
 impl<I: Source> Iterator for SpatialAudioChain<I> {
     type Item = f32;
+
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
         if self.buffer.is_exhausted() {

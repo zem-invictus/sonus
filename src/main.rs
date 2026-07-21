@@ -1,8 +1,6 @@
 mod spatial_audio;
 
-use crate::spatial_audio::emitter::SonusEmitter;
-use crate::spatial_audio::occlusion::{AcousticMaterial, AudioListener, Wall};
-use crate::spatial_audio::plugin::SpatialAudioPlugin;
+use crate::spatial_audio::{AcousticMaterial, AudioListener, SonusEmitter, SpatialAudioPlugin, Wall};
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -31,6 +29,9 @@ fn setup_game(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    // 1. Спавним 3D излучатель звука напрямую с SonusEmitter.
+    // Спавним его на (-5.0, 1.0, 0.0), то есть строго ЗА стеной (которая стоит на 0.0)
+    // относительно игрока, который стоит на (5.0, 1.0, 0.0).
     commands.spawn((
         Mesh3d(meshes.add(Sphere::new(0.5))),
         MeshMaterial3d(materials.add(StandardMaterial {
@@ -75,8 +76,8 @@ fn setup_game(
             half_extents: Vec3::new(1.0, 1.5, 5.0),
         },
         AcousticMaterial {
-            lowpass_cutoff_hz: 20000.0,   // Глухая стена, оставляет только глухие басы (LPF срез 300 Гц)
-            highpass_cutoff_hz: 1000.0,  // Немного приглушает суб-бас (HPF срез 100 Гц)
+            lowpass_cutoff_hz: 300.0,   // Глухая стена, оставляет только глухие басы (LPF срез 300 Гц)
+            highpass_cutoff_hz: 100.0,  // Немного приглушает суб-бас (HPF срез 100 Гц)
         },
     ));
 
@@ -125,7 +126,7 @@ fn movement_system(
     }
 }
 
-/// Система визуальной отладки: красит игрока в желтый цвет, 
+/// Система визуальной отладки: красит игрока в желтый цвет,
 /// если LPF срез любого активного эмиттера упал ниже 19000 Гц (звук окклюдирован)
 fn debug_visualize_occlusion(
     emitter_query: Query<&SonusEmitter>,
