@@ -1,6 +1,6 @@
 mod spatial_audio;
 
-use crate::spatial_audio::{AcousticMaterial, AudioListener, SonusEmitter, SpatialAudioPlugin, Wall};
+use crate::spatial_audio::{AcousticMaterial, AudioListener, SonusEmitter, SpatialAudioPlugin};
 use bevy::prelude::*;
 
 #[derive(Component)]
@@ -72,13 +72,7 @@ fn setup_game(
             ..default()
         })),
         Transform::from_xyz(0.0, 1.5, 0.0),
-        Wall {
-            half_extents: Vec3::new(1.0, 1.5, 5.0),
-        },
-        AcousticMaterial {
-            lowpass_cutoff_hz: 300.0,   // Глухая стена, оставляет только глухие басы (LPF срез 300 Гц)
-            highpass_cutoff_hz: 100.0,  // Немного приглушает суб-бас (HPF срез 100 Гц)
-        },
+        AcousticMaterial::new(Vec3::new(2.0, 3.0, 10.0), 300.0, 20.0),
     ));
 
     // 6. Игрок-Слушатель (белая сфера)

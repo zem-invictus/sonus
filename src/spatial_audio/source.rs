@@ -79,15 +79,7 @@ impl<I: Source> SpatialAudioChain<I> {
     fn fill_and_process_block(&mut self) -> Option<()> {
         self.buffer.clear();
 
-        let total_samples = self.buffer.capacity();
-
-        for _ in 0..total_samples {
-            if let Some(sample) = self.input.next() {
-                self.buffer.push(sample);
-            } else {
-                break;
-            }
-        }
+        self.buffer.fill_from_iter(&mut self.input);
 
         if self.buffer.is_empty() {
             return None;
@@ -95,7 +87,7 @@ impl<I: Source> SpatialAudioChain<I> {
 
         if let Some(occlusion_chain) = &mut self.occlusion_chain {
             occlusion_chain.update();
-            occlusion_chain.process(self.buffer.as_mut_slice());
+            occlusion_chain.process(&mut self.buffer);
         }
         Some(())
     }
