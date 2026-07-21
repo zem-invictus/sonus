@@ -55,7 +55,7 @@ impl<I: Source> SpatialAudioChain<I> {
             NonZero::new(input.channels().get()).expect("Number of audio source channels is 0!");
         let sample_rate =
             NonZero::new(input.sample_rate().get()).expect("Sample rate of audio source is 0!");
-        let buffer = BlockBuffer::new(128, channels);
+        let buffer = BlockBuffer::new(512, channels);
 
         Self {
             input,
