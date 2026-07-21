@@ -1,13 +1,6 @@
-#![allow(unused_imports)]
-pub mod biquad;
-pub mod source;
-pub mod control;
-pub mod plugin;
-pub mod buffer;
 pub mod config;
-pub mod occlusion;
-pub mod spawn;
-pub mod emitter;
+pub mod dsp;
+pub mod ecs;
+pub mod source;
 
-pub use occlusion::{AcousticMaterial, AudioListener, Wall};
-pub use plugin::SpatialAudioPlugin;
+pub use ecs::{AcousticMaterial, AudioListener, SonusEmitter, SpatialAudioPlugin, Wall};

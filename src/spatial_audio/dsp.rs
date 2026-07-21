@@ -1,8 +1,9 @@
-use crate::spatial_audio::biquad::BiquadMode::{HighPass, LowPass};
-use crate::spatial_audio::control::OcclusionControl;
+use crate::spatial_audio::config::OcclusionControl;
 use std::f32::consts::FRAC_1_SQRT_2;
+use std::num::NonZero;
 use std::sync::Arc;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BiquadMode {
     LowPass,
     HighPass,
@@ -78,12 +79,12 @@ pub struct BiquadFilter {
 impl BiquadFilter {
     pub fn new(channels: u16, sample_rate: f32, mode: BiquadMode) -> Self {
         let frequency_hz: f32 = match mode {
-            LowPass => 20000.0,
-            HighPass => 20.0,
+            BiquadMode::LowPass => 20000.0,
+            BiquadMode::HighPass => 20.0,
         };
         let coeffs = match mode {
-            LowPass => BiquadCoefficients::low_pass(20000.0, sample_rate, FRAC_1_SQRT_2),
-            HighPass => BiquadCoefficients::high_pass(20.0, sample_rate, FRAC_1_SQRT_2),
+            BiquadMode::LowPass => BiquadCoefficients::low_pass(20000.0, sample_rate, FRAC_1_SQRT_2),
+            BiquadMode::HighPass => BiquadCoefficients::high_pass(20.0, sample_rate, FRAC_1_SQRT_2),
         };
 
         Self {
@@ -108,7 +109,7 @@ pub(crate) struct OcclusionAudioChain {
     lowpass_filter: BiquadFilter,
     highpass_filter: BiquadFilter,
     control: Arc<OcclusionControl>,
-    sample_rate: f32
+    sample_rate: f32,
 }
 
 impl OcclusionAudioChain {
@@ -118,17 +119,17 @@ impl OcclusionAudioChain {
         control: Arc<OcclusionControl>,
     ) -> Self {
         Self {
-            lowpass_filter: BiquadFilter::new(channels, sample_rate, LowPass),
-            highpass_filter: BiquadFilter::new(channels, sample_rate, HighPass),
+            lowpass_filter: BiquadFilter::new(channels, sample_rate, BiquadMode::LowPass),
+            highpass_filter: BiquadFilter::new(channels, sample_rate, BiquadMode::HighPass),
             control,
-            sample_rate
+            sample_rate,
         }
     }
 
     pub(crate) fn update(&mut self) {
+        // 1. Плавно подтягиваем частоту Low-Pass фильтра
         let target_lpf = self.control.lowpass_hz.get();
         let current_lpf = self.lowpass_filter.frequency_hz;
-        
         let next_lpf = current_lpf + (target_lpf - current_lpf) * 0.15;
 
         if (next_lpf - current_lpf).abs() > 0.1 {
@@ -136,6 +137,7 @@ impl OcclusionAudioChain {
             self.lowpass_filter.coeffs = BiquadCoefficients::low_pass(next_lpf, self.sample_rate, FRAC_1_SQRT_2);
         }
 
+        // 2. Плавно подтягиваем частоту High-Pass фильтра
         let target_hpf = self.control.highpass_hz.get();
         let current_hpf = self.highpass_filter.frequency_hz;
         let next_hpf = current_hpf + (target_hpf - current_hpf) * 0.15;
@@ -149,5 +151,70 @@ impl OcclusionAudioChain {
     pub fn process(&mut self, samples: &mut [f32]) {
         self.lowpass_filter.process(samples);
         self.highpass_filter.process(samples);
+    }
+}
+
+pub(crate) struct BlockBuffer {
+    data: Vec<f32>,
+    read_index: u32,
+    block_size: u16,
+    channels: NonZero<u16>,
+}
+
+impl BlockBuffer {
+    pub fn new(block_size: u16, channels: NonZero<u16>) -> Self {
+        Self {
+            data: Vec::with_capacity((block_size * channels.get()) as usize),
+            read_index: 0,
+            block_size,
+            channels,
+        }
+    }
+
+    #[inline]
+    pub fn capacity(&self) -> usize {
+        (self.block_size * self.channels.get()) as usize
+    }
+
+    #[inline]
+    pub fn channels(&self) -> NonZero<u16> {
+        self.channels
+    }
+
+    #[inline]
+    pub fn push(&mut self, sample: f32) {
+        debug_assert!(
+            self.data.len() < self.data.capacity(),
+            "Попытка переполнить BlockBuffer!"
+        );
+        self.data.push(sample);
+    }
+
+    #[inline]
+    pub fn pop(&mut self) -> f32 {
+        let sample = self.data[self.read_index as usize];
+        self.read_index += 1;
+        sample
+    }
+
+    #[inline]
+    pub fn clear(&mut self) {
+        self.data.clear();
+        self.read_index = 0;
+    }
+
+    #[inline]
+    pub fn is_exhausted(&self) -> bool {
+        self.read_index as usize >= self.data.len()
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    #[inline]
+    pub fn as_mut_slice(&mut self) -> &mut [f32] {
+        &mut self.data
     }
 }
