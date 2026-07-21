@@ -1,5 +1,7 @@
-use crate::spatial_audio::config::{AudioParam, OcclusionControl, SonusControl};
-use crate::spatial_audio::source::SonusSource;
+//! Bevy ECS integration components, systems, and plugins for spatial audio.
+
+use crate::sonus::config::{AudioParam, OcclusionControl, SonusControl};
+use crate::sonus::source::SonusSource;
 use bevy::app::App;
 use bevy::asset::Handle;
 use bevy::audio::{AddAudioSource, AudioSource};
@@ -7,12 +9,11 @@ use bevy::math::bounding::{Aabb2d, RayCast2d};
 use bevy::prelude::*;
 use std::sync::Arc;
 
-// === КОМПОНЕНТЫ ===
-
+/// Marker component for the active spatial audio listener entity.
 #[derive(Component)]
 pub struct AudioListener;
 
-/// Акустический материал стены, задающий размеры и частоты среза при окклюзии
+/// Physical acoustic properties of an obstacle entity.
 #[derive(Component, Clone, Copy, Debug)]
 pub struct AcousticMaterial {
     pub half_extends: Vec3,
@@ -21,6 +22,7 @@ pub struct AcousticMaterial {
 }
 
 impl AcousticMaterial {
+    /// Creates a new acoustic material with defined dimensions and frequency cutoffs.
     pub fn new(size: Vec3, lowpass_cutoff_hz: f32, highpass_cutoff_hz: f32) -> Self {
         Self {
             half_extends: size * 0.5,
@@ -64,19 +66,19 @@ impl From<Handle<AudioSource>> for SonusSourceInput {
     }
 }
 
+/// Emitter component attached to spatial audio sources in the Bevy scene.
 #[derive(Component)]
 pub struct SonusEmitter {
     pub(crate) source: SonusSourceInput,
     pub(crate) control: Arc<SonusControl>,
-    pub(crate) use_occlusion: bool,
 }
 
 impl SonusEmitter {
+    /// Creates a new sound emitter from an asset path or handle.
     pub fn new(source: impl Into<SonusSourceInput>) -> Self {
         Self {
             source: source.into(),
             control: Arc::new(SonusControl::new()),
-            use_occlusion: false,
         }
     }
 
@@ -84,8 +86,8 @@ impl SonusEmitter {
         self.source = source.into();
     }
 
+    /// Enables real-time occlusion filtering for this sound emitter.
     pub fn with_occlusion(mut self) -> Self {
-        self.use_occlusion = true;
         self.control = Arc::new(SonusControl {
             occlusion_control: Some(Arc::new(OcclusionControl {
                 lowpass_hz: AudioParam::new(20000.0),
@@ -96,8 +98,7 @@ impl SonusEmitter {
     }
 }
 
-// === ECS СИСТЕМЫ ===
-
+/// System for instantiating and attaching custom `SonusSource` audio players to entities.
 pub(crate) fn sonus_audio_system(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
@@ -126,6 +127,7 @@ pub(crate) fn sonus_audio_system(
     }
 }
 
+/// System for computing raycast intersections between audio emitters and acoustic obstacles.
 pub fn audio_occlusion_system(
     emitter_query: Query<(&Transform, &SonusEmitter)>,
     listener_query: Query<&Transform, With<AudioListener>>,
@@ -137,49 +139,47 @@ pub fn audio_occlusion_system(
     let listener_pos = listener_transform.translation.xz();
 
     for (emitter_transform, emitter) in emitter_query.iter() {
-        let emitter_pos = emitter_transform.translation.xz();
+        let Some(occlusion_control) = &emitter.control.occlusion_control else {
+            continue;
+        };
 
+        let emitter_pos = emitter_transform.translation.xz();
         let delta = listener_pos - emitter_pos;
         let max_dist = delta.length();
 
         let Ok(dir) = Dir2::new(delta) else { continue };
-
         let ray = RayCast2d::new(emitter_pos, dir, max_dist);
 
         let mut target_lpf = 20000.0f32;
         let mut target_hpf = 20.0f32;
 
-        if let Some(occlusion_control) = &emitter.control.occlusion_control {
-            for (wall_transform, material) in wall_query.iter() {
-                let wall_pos = wall_transform.translation.xz();
-                let wall_half_extent = material.half_extends.xz();
+        for (wall_transform, material) in wall_query.iter() {
+            let wall_pos = wall_transform.translation.xz();
+            let wall_half_extent = material.half_extends.xz();
 
-                let aabb = Aabb2d::new(wall_pos, wall_half_extent);
+            let aabb = Aabb2d::new(wall_pos, wall_half_extent);
 
-                if let Some(hit_dist) = ray.aabb_intersection_at(&aabb)
-                    && hit_dist <= max_dist
-                {
-                    target_lpf = target_lpf.min(material.lowpass_cutoff_hz);
-                    target_hpf = target_hpf.max(material.highpass_cutoff_hz);
-                }
+            if let Some(hit_dist) = ray.aabb_intersection_at(&aabb)
+                && hit_dist <= max_dist
+            {
+                target_lpf = target_lpf.min(material.lowpass_cutoff_hz);
+                target_hpf = target_hpf.max(material.highpass_cutoff_hz);
             }
+        }
 
-            // Мгновенная установка целевых частот в атомики при изменении состояния
-            let current_lpf = occlusion_control.lowpass_hz.get();
-            if current_lpf != target_lpf {
-                occlusion_control.lowpass_hz.set(target_lpf);
-            }
+        let current_lpf = occlusion_control.lowpass_hz.get();
+        if current_lpf != target_lpf {
+            occlusion_control.lowpass_hz.set(target_lpf);
+        }
 
-            let current_hpf = occlusion_control.highpass_hz.get();
-            if current_hpf != target_hpf {
-                occlusion_control.highpass_hz.set(target_hpf);
-            }
+        let current_hpf = occlusion_control.highpass_hz.get();
+        if current_hpf != target_hpf {
+            occlusion_control.highpass_hz.set(target_hpf);
         }
     }
 }
 
-// === PLUG-IN ===
-
+/// Bevy plugin registering spatial audio components and processing systems.
 pub struct SpatialAudioPlugin;
 
 impl Plugin for SpatialAudioPlugin {

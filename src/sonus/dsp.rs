@@ -1,8 +1,11 @@
-use crate::spatial_audio::config::OcclusionControl;
+//! Digital Signal Processing (DSP) primitives and filters.
+
+use crate::sonus::config::OcclusionControl;
 use std::f32::consts::FRAC_1_SQRT_2;
 use std::num::NonZero;
 use std::sync::Arc;
 
+/// Filter operational mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BiquadMode {
     LowPass,
@@ -52,9 +55,9 @@ impl BiquadCoefficients {
             a2: (1.0 - alpha) / a0,
         }
     }
-
 }
 
+/// Internal delay-line state of a biquad filter channel.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BiquadState {
     s1: f32,
@@ -71,6 +74,7 @@ impl BiquadState {
     }
 }
 
+/// Biquad filter supporting real-time per-sample coefficient interpolation.
 pub struct BiquadFilter {
     frequency_hz: f32,
     sample_rate: f32,
@@ -197,6 +201,7 @@ impl OcclusionAudioChain {
     }
 }
 
+/// Contiguous audio block buffer managing multichannel sample storage.
 pub(crate) struct BlockBuffer {
     data: Vec<f32>,
     read_index: u32,
@@ -238,7 +243,7 @@ impl BlockBuffer {
     pub fn push(&mut self, sample: f32) {
         debug_assert!(
             self.data.len() < self.data.capacity(),
-            "Попытка переполнить BlockBuffer!"
+            "BlockBuffer capacity exceeded"
         );
         self.data.push(sample);
     }
