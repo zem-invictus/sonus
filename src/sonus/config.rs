@@ -1,8 +1,8 @@
 //! Shared control configuration and lock-free parameter types for spatial audio.
 
+use std::sync::Arc;
 use std::sync::atomic::AtomicU32;
 use std::sync::atomic::Ordering::Relaxed;
-use std::sync::Arc;
 
 /// Distance-based attenuation models for spatial audio emitters.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -20,14 +20,17 @@ pub enum AttenuationModel {
 }
 
 /// Shared control structure attached to a spatial audio emitter.
+#[derive(Clone)]
 pub struct SonusControl {
     pub occlusion_control: Option<Arc<OcclusionControl>>,
+    pub attenuation_control: Option<Arc<AttenuationControl>>,
 }
 
 impl SonusControl {
     pub fn new() -> Self {
         Self {
             occlusion_control: None,
+            attenuation_control: None,
         }
     }
 }
@@ -36,6 +39,12 @@ impl SonusControl {
 pub struct OcclusionControl {
     pub lowpass_hz: AudioParam,
     pub highpass_hz: AudioParam,
+}
+
+/// Parameters for real-time distance attenuation.
+pub struct AttenuationControl {
+    pub model: AttenuationModel,
+    pub gain: AudioParam,
 }
 
 /// Lock-free floating-point audio parameter synchronized between ECS and audio threads.
