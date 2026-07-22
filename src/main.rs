@@ -1,5 +1,6 @@
 mod sonus;
 
+use crate::sonus::config::AttenuationModel;
 use crate::sonus::{AcousticMaterial, AudioListener, SonusEmitter, SpatialAudioPlugin};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::input::mouse::AccumulatedMouseMotion;
@@ -11,15 +12,6 @@ struct Position {
     x: f32,
     y: f32,
 }
-
-#[derive(Component)]
-struct Velocity {
-    x: f32,
-    y: f32,
-}
-
-#[derive(Component)]
-struct Name(String);
 
 /// Component tag for the on-screen FPS display UI text.
 #[derive(Component)]
@@ -65,7 +57,12 @@ fn setup_game(
             ..default()
         })),
         Transform::from_xyz(-5.0, 1.0, 0.0),
-        SonusEmitter::new("input.wav").with_occlusion(),
+        SonusEmitter::new("input.wav")
+            .with_occlusion()
+            .with_attenuation(AttenuationModel::Linear {
+                min_dist: 2.0,
+                max_dist: 20.0,
+            }),
     ));
 
     commands.spawn((
@@ -100,8 +97,6 @@ fn setup_game(
         })),
         Transform::from_xyz(5.0, 1.0, 0.0),
         Position { x: 5.0, y: 0.0 },
-        Velocity { x: 0.0, y: 0.0 },
-        Name("Player 1".to_string()),
         AudioListener,
     )).with_child((
         Camera3d::default(),

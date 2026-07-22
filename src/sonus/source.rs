@@ -1,7 +1,7 @@
 //! Rodio source adapter and audio stream processing pipeline.
 
-use crate::sonus::config::{OcclusionControl, SonusControl};
-use crate::sonus::dsp::{BlockBuffer, OcclusionAudioChain};
+use crate::sonus::config::{AttenuationControl, OcclusionControl, SonusControl};
+use crate::sonus::dsp::{AttenuationChain, BlockBuffer, OcclusionChain};
 use bevy::audio::Decodable;
 use bevy::prelude::{Asset, TypePath};
 use rodio::source::Repeat;
@@ -35,10 +35,14 @@ impl Decodable for SonusSource {
         let channels = raw_decoder.channels().get();
         let sample_rate = raw_decoder.sample_rate().get();
 
-        let mut chain = SpatialAudioChain::new(raw_decoder, self.control.clone());
+        let mut chain = SpatialAudioChain::new(raw_decoder);
 
         if let Some(occlusion_control) = self.control.occlusion_control.clone() {
             chain.add_occlusion_chain(channels, sample_rate as f32, occlusion_control);
+        }
+
+        if let Some(attenuation_control) = self.control.attenuation_control.clone() {
+            chain.add_attenuation_chain(attenuation_control);
         }
 
         chain
@@ -50,13 +54,13 @@ pub struct SpatialAudioChain<I: Source> {
     input: I,
     sample_rate: NonZero<u32>,
     buffer: BlockBuffer,
-    control: Arc<SonusControl>,
-    occlusion_chain: Option<OcclusionAudioChain>,
+    occlusion_chain: Option<OcclusionChain>,
+    attenuation_chain: Option<AttenuationChain>,
 }
 
 impl<I: Source> SpatialAudioChain<I> {
     /// Creates a new spatial audio processing chain with a 512-sample buffer.
-    pub fn new(input: I, control: Arc<SonusControl>) -> Self {
+    pub fn new(input: I) -> Self {
         let channels =
             NonZero::new(input.channels().get()).expect("Number of audio source channels is 0!");
         let sample_rate =
@@ -67,8 +71,8 @@ impl<I: Source> SpatialAudioChain<I> {
             input,
             sample_rate,
             buffer,
-            control,
             occlusion_chain: None,
+            attenuation_chain: None,
         }
     }
 
@@ -78,7 +82,12 @@ impl<I: Source> SpatialAudioChain<I> {
         sample_rate: f32,
         control: Arc<OcclusionControl>,
     ) -> &mut Self {
-        self.occlusion_chain = Some(OcclusionAudioChain::new(channels, sample_rate, control));
+        self.occlusion_chain = Some(OcclusionChain::new(channels, sample_rate, control));
+        self
+    }
+
+    fn add_attenuation_chain(&mut self, control: Arc<AttenuationControl>) -> &mut Self {
+        self.attenuation_chain = Some(AttenuationChain::new(control));
         self
     }
 
@@ -95,6 +104,12 @@ impl<I: Source> SpatialAudioChain<I> {
             occlusion_chain.update();
             occlusion_chain.process(&mut self.buffer);
         }
+
+        if let Some(attenuation_chain) = &mut self.attenuation_chain {
+            attenuation_chain.update();
+            attenuation_chain.process(&mut self.buffer);
+        }
+
         Some(())
     }
 }

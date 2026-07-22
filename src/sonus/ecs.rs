@@ -1,6 +1,8 @@
 //! Bevy ECS integration components, systems, and plugins for spatial audio.
 
-use crate::sonus::config::{AudioParam, OcclusionControl, SonusControl};
+use crate::sonus::config::{
+    AttenuationControl, AttenuationModel, AudioParam, OcclusionControl, SonusControl,
+};
 use crate::sonus::source::SonusSource;
 use bevy::app::App;
 use bevy::asset::Handle;
@@ -88,12 +90,19 @@ impl SonusEmitter {
 
     /// Enables real-time occlusion filtering for this sound emitter.
     pub fn with_occlusion(mut self) -> Self {
-        self.control = Arc::new(SonusControl {
-            occlusion_control: Some(Arc::new(OcclusionControl {
-                lowpass_hz: AudioParam::new(20000.0),
-                highpass_hz: AudioParam::new(20.0),
-            })),
-        });
+        Arc::make_mut(&mut self.control).occlusion_control = Some(Arc::new(OcclusionControl {
+            lowpass_hz: AudioParam::new(20000.0),
+            highpass_hz: AudioParam::new(20.0),
+        }));
+        self
+    }
+
+    /// Enables real-time distance attenuation with a specified attenuation model.
+    pub fn with_attenuation(mut self, model: AttenuationModel) -> Self {
+        Arc::make_mut(&mut self.control).attenuation_control = Some(Arc::new(AttenuationControl {
+            model,
+            gain: AudioParam::new(1.0),
+        }));
         self
     }
 }
@@ -128,7 +137,7 @@ pub(crate) fn sonus_audio_system(
 }
 
 /// System for computing raycast intersections between audio emitters and acoustic obstacles.
-pub fn audio_occlusion_system(
+pub fn sonus_occlusion_system(
     emitter_query: Query<(&Transform, &SonusEmitter)>,
     listener_query: Query<&Transform, With<AudioListener>>,
     wall_query: Query<(&Transform, &AcousticMaterial)>,
@@ -179,12 +188,69 @@ pub fn audio_occlusion_system(
     }
 }
 
+/// System for computing distance-based audio attenuation and updating target volume gain.
+pub fn sonus_attenuation_system(
+    emitter_query: Query<(&Transform, &SonusEmitter)>,
+    listener_query: Query<&Transform, With<AudioListener>>,
+) {
+    let Some(listener_transform) = listener_query.iter().next() else {
+        return;
+    };
+
+    for (emitter_transform, emitter) in emitter_query.iter() {
+        let Some(attenuation_control) = &emitter.control.attenuation_control else {
+            continue;
+        };
+
+        let dist = listener_transform
+            .translation
+            .distance(emitter_transform.translation);
+
+        let target_gain = match attenuation_control.model {
+            AttenuationModel::None => 1.0,
+            AttenuationModel::Linear { min_dist, max_dist } => {
+                if dist <= min_dist {
+                    1.0
+                } else if dist >= max_dist {
+                    0.0
+                } else {
+                    1.0 - (dist - min_dist) / (max_dist - min_dist)
+                }
+            }
+            AttenuationModel::InverseDistance {
+                ref_dist,
+                rolloff_factor,
+                max_dist,
+            } => {
+                if dist >= max_dist {
+                    0.0
+                } else if dist <= ref_dist {
+                    1.0
+                } else {
+                    ref_dist / (ref_dist + rolloff_factor * (dist - ref_dist))
+                }
+            }
+        };
+
+        let current_gain = attenuation_control.gain.get();
+        if (current_gain - target_gain).abs() > 0.0001 {
+            attenuation_control.gain.set(target_gain);
+        }
+    }
+}
+
 /// Bevy plugin registering spatial audio components and processing systems.
 pub struct SpatialAudioPlugin;
 
 impl Plugin for SpatialAudioPlugin {
     fn build(&self, app: &mut App) {
-        app.add_audio_source::<SonusSource>()
-            .add_systems(Update, (sonus_audio_system, audio_occlusion_system));
+        app.add_audio_source::<SonusSource>().add_systems(
+            Update,
+            (
+                sonus_audio_system,
+                sonus_occlusion_system,
+                sonus_attenuation_system,
+            ),
+        );
     }
 }

@@ -1,6 +1,6 @@
 //! Digital Signal Processing (DSP) primitives and filters.
 
-use crate::sonus::config::OcclusionControl;
+use crate::sonus::config::{AttenuationControl, OcclusionControl};
 use std::f32::consts::FRAC_1_SQRT_2;
 use std::num::NonZero;
 use std::sync::Arc;
@@ -12,6 +12,7 @@ pub enum BiquadMode {
     HighPass,
 }
 
+/// Internal biquad filter transfer function coefficients.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct BiquadCoefficients {
     b0: f32,
@@ -79,7 +80,7 @@ pub struct BiquadFilter {
     frequency_hz: f32,
     sample_rate: f32,
     mode: BiquadMode,
-    pub channel_states: Vec<BiquadState>,
+    channel_states: Vec<BiquadState>,
     coeffs: BiquadCoefficients,
     target_coeffs: BiquadCoefficients,
 }
@@ -171,13 +172,61 @@ impl BiquadFilter {
     }
 }
 
-pub(crate) struct OcclusionAudioChain {
+/// DSP gain processor supporting real-time per-sample volume interpolation.
+pub struct AttenuationFilter {
+    gain: f32,
+    target_gain: f32,
+}
+
+impl AttenuationFilter {
+    /// Creates a new `AttenuationFilter` with an initial gain factor.
+    pub fn new(initial_gain: f32) -> Self {
+        Self {
+            gain: initial_gain,
+            target_gain: initial_gain,
+        }
+    }
+
+    /// Sets the target gain value for interpolation.
+    pub fn set_target(&mut self, target_gain: f32) {
+        self.target_gain = target_gain;
+    }
+
+    /// Processes an audio buffer in-place using per-sample linear gain interpolation.
+    pub fn process(&mut self, buffer: &mut BlockBuffer) {
+        let frames_count = buffer.frames_count();
+        if frames_count == 0 {
+            return;
+        }
+
+        let inv_frames = if frames_count > 1 {
+            1.0 / (frames_count - 1) as f32
+        } else {
+            1.0
+        };
+
+        let gain_step = (self.target_gain - self.gain) * inv_frames;
+        let mut current_gain = self.gain;
+
+        for frame_chunk in buffer.frames_mut() {
+            for sample in frame_chunk.iter_mut() {
+                *sample *= current_gain;
+            }
+            current_gain += gain_step;
+        }
+
+        self.gain = self.target_gain;
+    }
+}
+
+/// Occlusion processing chain reading atomic frequency targets.
+pub(crate) struct OcclusionChain {
     lowpass_filter: BiquadFilter,
     highpass_filter: BiquadFilter,
     control: Arc<OcclusionControl>,
 }
 
-impl OcclusionAudioChain {
+impl OcclusionChain {
     pub(crate) fn new(channels: u16, sample_rate: f32, control: Arc<OcclusionControl>) -> Self {
         Self {
             lowpass_filter: BiquadFilter::new(channels, sample_rate, BiquadMode::LowPass),
@@ -188,7 +237,11 @@ impl OcclusionAudioChain {
 
     pub(crate) fn update(&mut self) {
         let target_lpf = self.control.lowpass_hz.get();
-        let speed_lpf = if target_lpf < self.lowpass_filter.frequency_hz() { 0.25 } else { 0.15 };
+        let speed_lpf = if target_lpf < self.lowpass_filter.frequency_hz() {
+            0.25
+        } else {
+            0.15
+        };
         self.lowpass_filter.update_cutoff(target_lpf, speed_lpf);
 
         let target_hpf = self.control.highpass_hz.get();
@@ -198,6 +251,31 @@ impl OcclusionAudioChain {
     pub fn process(&mut self, buffer: &mut BlockBuffer) {
         self.lowpass_filter.process(buffer);
         self.highpass_filter.process(buffer);
+    }
+}
+
+/// Attenuation processing chain reading atomic volume targets.
+pub(crate) struct AttenuationChain {
+    filter: AttenuationFilter,
+    control: Arc<AttenuationControl>,
+}
+
+impl AttenuationChain {
+    /// Creates a new `AttenuationChain` bound to atomic attenuation parameters.
+    pub fn new(control: Arc<AttenuationControl>) -> Self {
+        Self {
+            filter: AttenuationFilter::new(1.0),
+            control,
+        }
+    }
+
+    pub(crate) fn update(&mut self) {
+        let target_gain = self.control.gain.get();
+        self.filter.set_target(target_gain);
+    }
+
+    pub fn process(&mut self, buffer: &mut BlockBuffer) {
+        self.filter.process(buffer);
     }
 }
 
