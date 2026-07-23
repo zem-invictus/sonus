@@ -35,10 +35,11 @@ impl SonusControl {
     }
 }
 
-/// Parameters for real-time occlusion filtering.
+/// Parameters for real-time 3-band occlusion filtering.
 pub struct OcclusionControl {
-    pub lowpass_hz: AudioParam,
-    pub highpass_hz: AudioParam,
+    pub gain_low: AudioParam,
+    pub gain_mid: AudioParam,
+    pub gain_high: AudioParam,
 }
 
 /// Parameters for real-time distance attenuation.

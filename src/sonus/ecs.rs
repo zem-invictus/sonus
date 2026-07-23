@@ -19,17 +19,24 @@ pub struct AudioListener;
 #[derive(Component, Clone, Copy, Debug)]
 pub struct AcousticMaterial {
     pub half_extends: Vec3,
-    pub lowpass_cutoff_hz: f32,
-    pub highpass_cutoff_hz: f32,
+    pub low_transmission: f32,
+    pub mid_transmission: f32,
+    pub high_transmission: f32,
 }
 
 impl AcousticMaterial {
-    /// Creates a new acoustic material with defined dimensions and frequency cutoffs.
-    pub fn new(size: Vec3, lowpass_cutoff_hz: f32, highpass_cutoff_hz: f32) -> Self {
+    /// Creates a new acoustic material with defined dimensions and 3-band transmission coefficients.
+    pub fn new(
+        size: Vec3,
+        low_transmission: f32,
+        mid_transmission: f32,
+        high_transmission: f32,
+    ) -> Self {
         Self {
             half_extends: size * 0.5,
-            lowpass_cutoff_hz,
-            highpass_cutoff_hz,
+            low_transmission,
+            mid_transmission,
+            high_transmission,
         }
     }
 }
@@ -38,8 +45,9 @@ impl Default for AcousticMaterial {
     fn default() -> Self {
         Self {
             half_extends: Vec3::splat(0.5),
-            lowpass_cutoff_hz: 20000.0,
-            highpass_cutoff_hz: 20.0,
+            low_transmission: 1.0,
+            mid_transmission: 1.0,
+            high_transmission: 1.0,
         }
     }
 }
@@ -88,11 +96,12 @@ impl SonusEmitter {
         self.source = source.into();
     }
 
-    /// Enables real-time occlusion filtering for this sound emitter.
+    /// Enables real-time 3-band occlusion filtering for this sound emitter.
     pub fn with_occlusion(mut self) -> Self {
         Arc::make_mut(&mut self.control).occlusion_control = Some(Arc::new(OcclusionControl {
-            lowpass_hz: AudioParam::new(20000.0),
-            highpass_hz: AudioParam::new(20.0),
+            gain_low: AudioParam::new(1.0),
+            gain_mid: AudioParam::new(1.0),
+            gain_high: AudioParam::new(1.0),
         }));
         self
     }
@@ -159,8 +168,9 @@ pub fn sonus_occlusion_system(
         let Ok(dir) = Dir2::new(delta) else { continue };
         let ray = RayCast2d::new(emitter_pos, dir, max_dist);
 
-        let mut target_lpf = 20000.0f32;
-        let mut target_hpf = 20.0f32;
+        let mut target_low = 1.0f32;
+        let mut target_mid = 1.0f32;
+        let mut target_high = 1.0f32;
 
         for (wall_transform, material) in wall_query.iter() {
             let wall_pos = wall_transform.translation.xz();
@@ -171,19 +181,20 @@ pub fn sonus_occlusion_system(
             if let Some(hit_dist) = ray.aabb_intersection_at(&aabb)
                 && hit_dist <= max_dist
             {
-                target_lpf = target_lpf.min(material.lowpass_cutoff_hz);
-                target_hpf = target_hpf.max(material.highpass_cutoff_hz);
+                target_low *= material.low_transmission;
+                target_mid *= material.mid_transmission;
+                target_high *= material.high_transmission;
             }
         }
 
-        let current_lpf = occlusion_control.lowpass_hz.get();
-        if current_lpf != target_lpf {
-            occlusion_control.lowpass_hz.set(target_lpf);
+        if (occlusion_control.gain_low.get() - target_low).abs() > 0.0001 {
+            occlusion_control.gain_low.set(target_low);
         }
-
-        let current_hpf = occlusion_control.highpass_hz.get();
-        if current_hpf != target_hpf {
-            occlusion_control.highpass_hz.set(target_hpf);
+        if (occlusion_control.gain_mid.get() - target_mid).abs() > 0.0001 {
+            occlusion_control.gain_mid.set(target_mid);
+        }
+        if (occlusion_control.gain_high.get() - target_high).abs() > 0.0001 {
+            occlusion_control.gain_high.set(target_high);
         }
     }
 }

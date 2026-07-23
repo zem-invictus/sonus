@@ -75,100 +75,33 @@ impl BiquadState {
     }
 }
 
-/// Biquad filter supporting real-time per-sample coefficient interpolation.
+/// Biquad filter for static frequency filtering.
 pub struct BiquadFilter {
-    frequency_hz: f32,
-    sample_rate: f32,
-    mode: BiquadMode,
     channel_states: Vec<BiquadState>,
     coeffs: BiquadCoefficients,
-    target_coeffs: BiquadCoefficients,
 }
 
 impl BiquadFilter {
-    pub fn new(channels: u16, sample_rate: f32, mode: BiquadMode) -> Self {
-        let frequency_hz: f32 = match mode {
-            BiquadMode::LowPass => 20000.0,
-            BiquadMode::HighPass => 20.0,
-        };
+    /// Creates a new `BiquadFilter` with a fixed cutoff frequency.
+    pub fn new(channels: u16, sample_rate: f32, mode: BiquadMode, frequency_hz: f32) -> Self {
         let coeffs = match mode {
             BiquadMode::LowPass => {
-                BiquadCoefficients::low_pass(20000.0, sample_rate, FRAC_1_SQRT_2)
+                BiquadCoefficients::low_pass(frequency_hz, sample_rate, FRAC_1_SQRT_2)
             }
-            BiquadMode::HighPass => BiquadCoefficients::high_pass(20.0, sample_rate, FRAC_1_SQRT_2),
+            BiquadMode::HighPass => {
+                BiquadCoefficients::high_pass(frequency_hz, sample_rate, FRAC_1_SQRT_2)
+            }
         };
 
         Self {
-            frequency_hz,
-            sample_rate,
-            mode,
             channel_states: vec![BiquadState::default(); channels as usize],
             coeffs,
-            target_coeffs: coeffs,
         }
     }
 
-    #[inline]
-    pub fn frequency_hz(&self) -> f32 {
-        self.frequency_hz
-    }
-
-    pub fn set_target(&mut self, target: BiquadCoefficients) {
-        self.target_coeffs = target;
-    }
-
-    pub fn update_cutoff(&mut self, target_hz: f32, speed_factor: f32) {
-        if (target_hz - self.frequency_hz).abs() > 0.1 {
-            self.frequency_hz += (target_hz - self.frequency_hz) * speed_factor;
-        } else {
-            self.frequency_hz = target_hz;
-        }
-
-        let target_coeffs = match self.mode {
-            BiquadMode::LowPass => {
-                BiquadCoefficients::low_pass(self.frequency_hz, self.sample_rate, FRAC_1_SQRT_2)
-            }
-            BiquadMode::HighPass => {
-                BiquadCoefficients::high_pass(self.frequency_hz, self.sample_rate, FRAC_1_SQRT_2)
-            }
-        };
-        self.set_target(target_coeffs);
-    }
-
-    pub fn process(&mut self, buffer: &mut BlockBuffer) {
-        let frames_count = buffer.frames_count();
-        if frames_count == 0 {
-            return;
-        }
-
-        let inv_frames = if frames_count > 1 {
-            1.0 / (frames_count - 1) as f32
-        } else {
-            1.0
-        };
-
-        let b0_step = (self.target_coeffs.b0 - self.coeffs.b0) * inv_frames;
-        let b1_step = (self.target_coeffs.b1 - self.coeffs.b1) * inv_frames;
-        let b2_step = (self.target_coeffs.b2 - self.coeffs.b2) * inv_frames;
-        let a1_step = (self.target_coeffs.a1 - self.coeffs.a1) * inv_frames;
-        let a2_step = (self.target_coeffs.a2 - self.coeffs.a2) * inv_frames;
-
-        let mut current_coeffs = self.coeffs;
-
-        for frame_chunk in buffer.frames_mut() {
-            for (channel, sample) in frame_chunk.iter_mut().enumerate() {
-                let input = *sample;
-                *sample = self.channel_states[channel].process_sample(input, &current_coeffs);
-            }
-
-            current_coeffs.b0 += b0_step;
-            current_coeffs.b1 += b1_step;
-            current_coeffs.b2 += b2_step;
-            current_coeffs.a1 += a1_step;
-            current_coeffs.a2 += a2_step;
-        }
-
-        self.coeffs = self.target_coeffs;
+    #[inline(always)]
+    pub fn process_channel_sample(&mut self, channel: usize, input: f32) -> f32 {
+        self.channel_states[channel].process_sample(input, &self.coeffs)
     }
 }
 
@@ -219,38 +152,84 @@ impl AttenuationFilter {
     }
 }
 
-/// Occlusion processing chain reading atomic frequency targets.
+/// 3-Band crossover occlusion processing chain reading atomic band gain targets.
 pub(crate) struct OcclusionChain {
-    lowpass_filter: BiquadFilter,
-    highpass_filter: BiquadFilter,
+    filter_low: BiquadFilter,
+    filter_mid_hp: BiquadFilter,
+    filter_mid_lp: BiquadFilter,
+    filter_high: BiquadFilter,
     control: Arc<OcclusionControl>,
+    gain_low: f32,
+    target_gain_low: f32,
+    gain_mid: f32,
+    target_gain_mid: f32,
+    gain_high: f32,
+    target_gain_high: f32,
 }
 
 impl OcclusionChain {
     pub(crate) fn new(channels: u16, sample_rate: f32, control: Arc<OcclusionControl>) -> Self {
         Self {
-            lowpass_filter: BiquadFilter::new(channels, sample_rate, BiquadMode::LowPass),
-            highpass_filter: BiquadFilter::new(channels, sample_rate, BiquadMode::HighPass),
+            filter_low: BiquadFilter::new(channels, sample_rate, BiquadMode::LowPass, 500.0),
+            filter_mid_hp: BiquadFilter::new(channels, sample_rate, BiquadMode::HighPass, 500.0),
+            filter_mid_lp: BiquadFilter::new(channels, sample_rate, BiquadMode::LowPass, 4000.0),
+            filter_high: BiquadFilter::new(channels, sample_rate, BiquadMode::HighPass, 4000.0),
             control,
+            gain_low: 1.0,
+            target_gain_low: 1.0,
+            gain_mid: 1.0,
+            target_gain_mid: 1.0,
+            gain_high: 1.0,
+            target_gain_high: 1.0,
         }
     }
 
     pub(crate) fn update(&mut self) {
-        let target_lpf = self.control.lowpass_hz.get();
-        let speed_lpf = if target_lpf < self.lowpass_filter.frequency_hz() {
-            0.25
-        } else {
-            0.15
-        };
-        self.lowpass_filter.update_cutoff(target_lpf, speed_lpf);
-
-        let target_hpf = self.control.highpass_hz.get();
-        self.highpass_filter.update_cutoff(target_hpf, 0.15);
+        self.target_gain_low = self.control.gain_low.get();
+        self.target_gain_mid = self.control.gain_mid.get();
+        self.target_gain_high = self.control.gain_high.get();
     }
 
     pub fn process(&mut self, buffer: &mut BlockBuffer) {
-        self.lowpass_filter.process(buffer);
-        self.highpass_filter.process(buffer);
+        let frames_count = buffer.frames_count();
+        if frames_count == 0 {
+            return;
+        }
+
+        let inv_frames = if frames_count > 1 {
+            1.0 / (frames_count - 1) as f32
+        } else {
+            1.0
+        };
+
+        let step_low = (self.target_gain_low - self.gain_low) * inv_frames;
+        let step_mid = (self.target_gain_mid - self.gain_mid) * inv_frames;
+        let step_high = (self.target_gain_high - self.gain_high) * inv_frames;
+
+        let mut curr_low = self.gain_low;
+        let mut curr_mid = self.gain_mid;
+        let mut curr_high = self.gain_high;
+
+        for frame_chunk in buffer.frames_mut() {
+            for (channel, sample) in frame_chunk.iter_mut().enumerate() {
+                let input = *sample;
+
+                let s_low = self.filter_low.process_channel_sample(channel, input);
+                let s_rest = self.filter_mid_hp.process_channel_sample(channel, input);
+                let s_mid = self.filter_mid_lp.process_channel_sample(channel, s_rest);
+                let s_high = self.filter_high.process_channel_sample(channel, s_rest);
+
+                *sample = (s_low * curr_low) + (s_mid * curr_mid) + (s_high * curr_high);
+            }
+
+            curr_low += step_low;
+            curr_mid += step_mid;
+            curr_high += step_high;
+        }
+
+        self.gain_low = self.target_gain_low;
+        self.gain_mid = self.target_gain_mid;
+        self.gain_high = self.target_gain_high;
     }
 }
 
