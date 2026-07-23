@@ -86,7 +86,7 @@ fn setup_game(
             ..default()
         })),
         Transform::from_xyz(0.0, 1.5, 0.0),
-        AcousticMaterial::new(Vec3::new(2.0, 3.0, 10.0), 300.0, 20.0),
+        AcousticMaterial::new(Vec3::new(2.0, 3.0, 10.0), 0.8, 0.3, 0.05),
     ));
 
     commands.spawn((
@@ -208,7 +208,7 @@ fn debug_visualize_occlusion(
     let mut is_any_occluded = false;
     for emitter in emitter_query.iter() {
         if let Some(occlusion_control) = &emitter.control.occlusion_control {
-            if occlusion_control.lowpass_hz.get() < 19000.0 {
+            if occlusion_control.gain_high.get() < 0.9 {
                 is_any_occluded = true;
                 break;
             }
