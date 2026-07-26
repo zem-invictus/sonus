@@ -59,6 +59,7 @@ fn setup_game(
         Transform::from_xyz(-5.0, 1.0, 0.0),
         SonusEmitter::new("input.wav")
             .with_occlusion()
+            .with_panning()
             .with_attenuation(AttenuationModel::Linear {
                 min_dist: 2.0,
                 max_dist: 20.0,

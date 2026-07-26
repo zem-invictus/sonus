@@ -1,6 +1,6 @@
 //! Digital Signal Processing (DSP) primitives and filters.
 
-use crate::sonus::config::{AttenuationControl, OcclusionControl};
+use crate::sonus::config::{AttenuationControl, OcclusionControl, PanningControl};
 use std::f32::consts::FRAC_1_SQRT_2;
 use std::num::NonZero;
 use std::sync::Arc;
@@ -251,6 +251,89 @@ impl AttenuationChain {
     pub(crate) fn update(&mut self) {
         let target_gain = self.control.gain.get();
         self.filter.set_target(target_gain);
+    }
+
+    pub fn process(&mut self, buffer: &mut BlockBuffer) {
+        self.filter.process(buffer);
+    }
+}
+
+/// DSP stereo panner applying Equal-Power gains per sample.
+pub struct PanningFilter {
+    left_gain: f32,
+    target_left_gain: f32,
+    right_gain: f32,
+    target_right_gain: f32,
+}
+
+impl PanningFilter {
+    pub fn new(initial_left: f32, initial_right: f32) -> Self {
+        Self {
+            left_gain: initial_left,
+            target_left_gain: initial_left,
+            right_gain: initial_right,
+            target_right_gain: initial_right,
+        }
+    }
+
+    pub fn set_targets(&mut self, target_left: f32, target_right: f32) {
+        self.target_left_gain = target_left;
+        self.target_right_gain = target_right;
+    }
+
+    pub fn process(&mut self, buffer: &mut BlockBuffer) {
+        if buffer.channels().get() != 2 {
+            return;
+        }
+
+        let frames_count = buffer.frames_count();
+        if frames_count == 0 {
+            return;
+        }
+
+        let inv_frames = if frames_count > 1 {
+            1.0 / (frames_count - 1) as f32
+        } else {
+            1.0
+        };
+
+        let step_left = (self.target_left_gain - self.left_gain) * inv_frames;
+        let step_right = (self.target_right_gain - self.right_gain) * inv_frames;
+
+        let mut curr_left = self.left_gain;
+        let mut curr_right = self.right_gain;
+
+        for frame_chunk in buffer.frames_mut() {
+            frame_chunk[0] *= curr_left;
+            frame_chunk[1] *= curr_right;
+
+            curr_left += step_left;
+            curr_right += step_right;
+        }
+
+        self.left_gain = self.target_left_gain;
+        self.right_gain = self.target_right_gain;
+    }
+}
+
+/// Stereo panning processing chain reading atomic gain targets.
+pub(crate) struct PanningChain {
+    filter: PanningFilter,
+    control: Arc<PanningControl>,
+}
+
+impl PanningChain {
+    pub fn new(control: Arc<PanningControl>) -> Self {
+        Self {
+            filter: PanningFilter::new(std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2),
+            control,
+        }
+    }
+
+    pub(crate) fn update(&mut self) {
+        let target_left = self.control.left_gain.get();
+        let target_right = self.control.right_gain.get();
+        self.filter.set_targets(target_left, target_right);
     }
 
     pub fn process(&mut self, buffer: &mut BlockBuffer) {

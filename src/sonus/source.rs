@@ -1,7 +1,7 @@
 //! Rodio source adapter and audio stream processing pipeline.
 
-use crate::sonus::config::{AttenuationControl, OcclusionControl, SonusControl};
-use crate::sonus::dsp::{AttenuationChain, BlockBuffer, OcclusionChain};
+use crate::sonus::config::{AttenuationControl, OcclusionControl, PanningControl, SonusControl};
+use crate::sonus::dsp::{AttenuationChain, BlockBuffer, OcclusionChain, PanningChain};
 use bevy::audio::Decodable;
 use bevy::prelude::{Asset, TypePath};
 use rodio::source::Repeat;
@@ -45,6 +45,10 @@ impl Decodable for SonusSource {
             chain.add_attenuation_chain(attenuation_control);
         }
 
+        if let Some(panning_control) = self.control.panning_control.clone() {
+            chain.add_panning_chain(panning_control);
+        }
+
         chain
     }
 }
@@ -56,6 +60,7 @@ pub struct SpatialAudioChain<I: Source> {
     buffer: BlockBuffer,
     occlusion_chain: Option<OcclusionChain>,
     attenuation_chain: Option<AttenuationChain>,
+    panning_chain: Option<PanningChain>,
 }
 
 impl<I: Source> SpatialAudioChain<I> {
@@ -73,6 +78,7 @@ impl<I: Source> SpatialAudioChain<I> {
             buffer,
             occlusion_chain: None,
             attenuation_chain: None,
+            panning_chain: None,
         }
     }
 
@@ -88,6 +94,11 @@ impl<I: Source> SpatialAudioChain<I> {
 
     fn add_attenuation_chain(&mut self, control: Arc<AttenuationControl>) -> &mut Self {
         self.attenuation_chain = Some(AttenuationChain::new(control));
+        self
+    }
+
+    fn add_panning_chain(&mut self, control: Arc<PanningControl>) -> &mut Self {
+        self.panning_chain = Some(PanningChain::new(control));
         self
     }
 
@@ -108,6 +119,11 @@ impl<I: Source> SpatialAudioChain<I> {
         if let Some(attenuation_chain) = &mut self.attenuation_chain {
             attenuation_chain.update();
             attenuation_chain.process(&mut self.buffer);
+        }
+
+        if let Some(panning_chain) = &mut self.panning_chain {
+            panning_chain.update();
+            panning_chain.process(&mut self.buffer);
         }
 
         Some(())

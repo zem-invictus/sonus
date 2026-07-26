@@ -24,6 +24,7 @@ pub enum AttenuationModel {
 pub struct SonusControl {
     pub occlusion_control: Option<Arc<OcclusionControl>>,
     pub attenuation_control: Option<Arc<AttenuationControl>>,
+    pub panning_control: Option<Arc<PanningControl>>,
 }
 
 impl SonusControl {
@@ -31,6 +32,7 @@ impl SonusControl {
         Self {
             occlusion_control: None,
             attenuation_control: None,
+            panning_control: None,
         }
     }
 }
@@ -46,6 +48,11 @@ pub struct OcclusionControl {
 pub struct AttenuationControl {
     pub model: AttenuationModel,
     pub gain: AudioParam,
+}
+
+pub struct PanningControl {
+    pub right_gain: AudioParam,
+    pub left_gain: AudioParam,
 }
 
 /// Lock-free floating-point audio parameter synchronized between ECS and audio threads.

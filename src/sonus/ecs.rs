@@ -1,15 +1,18 @@
 //! Bevy ECS integration components, systems, and plugins for spatial audio.
 
+use std::f32::consts::PI;
 use crate::sonus::config::{
-    AttenuationControl, AttenuationModel, AudioParam, OcclusionControl, SonusControl,
+    AttenuationControl, AttenuationModel, AudioParam, OcclusionControl, PanningControl,
+    SonusControl,
 };
 use crate::sonus::source::SonusSource;
 use bevy::app::App;
 use bevy::asset::Handle;
 use bevy::audio::{AddAudioSource, AudioSource};
-use bevy::math::bounding::{Aabb2d, RayCast2d};
+use bevy::math::bounding::{Aabb3d, RayCast3d};
 use bevy::prelude::*;
 use std::sync::Arc;
+use bevy::math::ops::{cos, sin};
 
 /// Marker component for the active spatial audio listener entity.
 #[derive(Component)]
@@ -114,6 +117,14 @@ impl SonusEmitter {
         }));
         self
     }
+
+    pub fn with_panning(mut self) -> Self {
+        Arc::make_mut(&mut self.control).panning_control = Some(Arc::new(PanningControl {
+            right_gain: AudioParam::new(0.5),
+            left_gain: AudioParam::new(0.5),
+        }));
+        self
+    }
 }
 
 /// System for instantiating and attaching custom `SonusSource` audio players to entities.
@@ -145,7 +156,7 @@ pub(crate) fn sonus_audio_system(
     }
 }
 
-/// System for computing raycast intersections between audio emitters and acoustic obstacles.
+/// System for computing raycast intersections in the obstacle's local coordinate space.
 pub fn sonus_occlusion_system(
     emitter_query: Query<(&Transform, &SonusEmitter)>,
     listener_query: Query<&Transform, With<AudioListener>>,
@@ -154,32 +165,39 @@ pub fn sonus_occlusion_system(
     let Some(listener_transform) = listener_query.iter().next() else {
         return;
     };
-    let listener_pos = listener_transform.translation.xz();
+    let listener_pos = listener_transform.translation;
 
     for (emitter_transform, emitter) in emitter_query.iter() {
         let Some(occlusion_control) = &emitter.control.occlusion_control else {
             continue;
         };
 
-        let emitter_pos = emitter_transform.translation.xz();
-        let delta = listener_pos - emitter_pos;
-        let max_dist = delta.length();
-
-        let Ok(dir) = Dir2::new(delta) else { continue };
-        let ray = RayCast2d::new(emitter_pos, dir, max_dist);
+        let emitter_pos = emitter_transform.translation;
 
         let mut target_low = 1.0f32;
         let mut target_mid = 1.0f32;
         let mut target_high = 1.0f32;
 
         for (wall_transform, material) in wall_query.iter() {
-            let wall_pos = wall_transform.translation.xz();
-            let wall_half_extent = material.half_extends.xz();
+            // Inverse world matrix converts world coordinates to obstacle local space
+            let inv_matrix = wall_transform.to_matrix().inverse();
 
-            let aabb = Aabb2d::new(wall_pos, wall_half_extent);
+            let local_emitter = inv_matrix.transform_point3(emitter_pos);
+            let local_listener = inv_matrix.transform_point3(listener_pos);
 
-            if let Some(hit_dist) = ray.aabb_intersection_at(&aabb)
-                && hit_dist <= max_dist
+            let local_delta = local_listener - local_emitter;
+            let local_dist = local_delta.length();
+
+            let Ok(local_dir) = Dir3::new(local_delta) else {
+                continue;
+            };
+            let local_ray = RayCast3d::new(local_emitter, local_dir, local_dist);
+
+            // Local AABB is centered at (0, 0, 0) in the obstacle's coordinate system
+            let local_aabb = Aabb3d::new(Vec3::ZERO, material.half_extends);
+
+            if let Some(hit_dist) = local_ray.aabb_intersection_at(&local_aabb)
+                && hit_dist <= local_dist
             {
                 target_low *= material.low_transmission;
                 target_mid *= material.mid_transmission;
@@ -187,13 +205,13 @@ pub fn sonus_occlusion_system(
             }
         }
 
-        if (occlusion_control.gain_low.get() - target_low).abs() > 0.0001 {
+        if (occlusion_control.gain_low.get() - target_low).abs() > 0.01 {
             occlusion_control.gain_low.set(target_low);
         }
-        if (occlusion_control.gain_mid.get() - target_mid).abs() > 0.0001 {
+        if (occlusion_control.gain_mid.get() - target_mid).abs() > 0.01 {
             occlusion_control.gain_mid.set(target_mid);
         }
-        if (occlusion_control.gain_high.get() - target_high).abs() > 0.0001 {
+        if (occlusion_control.gain_high.get() - target_high).abs() > 0.01 {
             occlusion_control.gain_high.set(target_high);
         }
     }
@@ -250,6 +268,43 @@ pub fn sonus_attenuation_system(
     }
 }
 
+pub fn sonus_panning_system(
+    emitter_query: Query<(&Transform, &SonusEmitter)>,
+    listener_query: Query<&Transform, With<AudioListener>>,
+) {
+    let Some(listener_transform) = listener_query.iter().next() else {
+        return;
+    };
+
+    let listener_pos = listener_transform.translation;
+    let list_right = listener_transform.right().as_vec3();
+
+    for (emitter_transform, emitter) in emitter_query.iter() {
+        let Some(panning_control) = &emitter.control.panning_control else {
+            continue;
+        };
+
+        let to_emitter = emitter_transform.translation - listener_pos;
+        let dist = to_emitter.length();
+
+        let (left_gain, right_gain) = if dist < 0.001 {
+            (std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2)
+        } else {
+            let dir = to_emitter / dist;
+            let pan = dir.dot(list_right).clamp(-1.0, 1.0);
+            let phi = (pan + 1.0) * PI * 0.25;
+            (cos(phi), sin(phi))
+        };
+
+        if (panning_control.left_gain.get() - left_gain).abs() > 0.001 {
+            panning_control.left_gain.set(left_gain);
+        }
+        if (panning_control.right_gain.get() - right_gain).abs() > 0.001 {
+            panning_control.right_gain.set(right_gain);
+        }
+    }
+}
+
 /// Bevy plugin registering spatial audio components and processing systems.
 pub struct SpatialAudioPlugin;
 
@@ -261,6 +316,7 @@ impl Plugin for SpatialAudioPlugin {
                 sonus_audio_system,
                 sonus_occlusion_system,
                 sonus_attenuation_system,
+                sonus_panning_system,
             ),
         );
     }
