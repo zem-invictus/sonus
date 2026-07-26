@@ -6,6 +6,7 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnost
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
 #[derive(Component)]
 struct Position {
@@ -25,6 +26,7 @@ fn main() {
             FrameTimeDiagnosticsPlugin::default(),
             LogDiagnosticsPlugin::default(),
         ))
+        .add_plugins(WorldInspectorPlugin::new())
         .add_systems(Startup, setup_game)
         .add_systems(
             Update,
