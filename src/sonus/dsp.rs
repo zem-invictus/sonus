@@ -219,7 +219,7 @@ impl OcclusionChain {
                 let s_mid = self.filter_mid_lp.process_channel_sample(channel, s_rest);
                 let s_high = self.filter_high.process_channel_sample(channel, s_rest);
 
-                *sample = (s_low * curr_low) + (s_mid * curr_mid) + (s_high * curr_high);
+                *sample = ((s_low * curr_low) + (s_mid * curr_mid) + (s_high * curr_high)) * 0.944;
             }
 
             curr_low += step_low;
@@ -230,6 +230,18 @@ impl OcclusionChain {
         self.gain_low = self.target_gain_low;
         self.gain_mid = self.target_gain_mid;
         self.gain_high = self.target_gain_high;
+    }
+}
+
+/// Smooth cubic soft-clipping function preventing digital DAC clipping above +-1.0.
+#[inline(always)]
+pub fn soft_clip(x: f32) -> f32 {
+    if x > 0.9 {
+        0.9 + 0.1 * ((x - 0.9) * 10.0).tanh()
+    } else if x < -0.9 {
+        -0.9 + 0.1 * ((x + 0.9) * 10.0).tanh()
+    } else {
+        x
     }
 }
 
@@ -300,8 +312,8 @@ impl PanningFilter {
         let mut curr_right = self.right_gain;
 
         for frame_chunk in buffer.frames_mut() {
-            frame_chunk[0] *= curr_left;
-            frame_chunk[1] *= curr_right;
+            frame_chunk[0] = soft_clip(frame_chunk[0] * curr_left);
+            frame_chunk[1] = soft_clip(frame_chunk[1] * curr_right);
 
             curr_left += step_left;
             curr_right += step_right;
@@ -331,8 +343,8 @@ impl PanningFilter {
         let mut curr_right = self.right_gain;
 
         for &sample in input.as_slice() {
-            output.push(sample * curr_left);
-            output.push(sample * curr_right);
+            output.push(soft_clip(sample * curr_left));
+            output.push(soft_clip(sample * curr_right));
 
             curr_left += step_left;
             curr_right += step_right;
@@ -489,9 +501,9 @@ mod tests {
         // Output should be interleaved stereo: [L, R, L, R, L, R, L, R]
         // Left should be ~1.0, Right should be ~0.0
         assert_eq!(samples.len(), 8);
-        assert!((samples[0] - 1.0).abs() < 1e-5);
+        assert!((samples[0] - soft_clip(1.0)).abs() < 1e-5);
         assert!((samples[1] - 0.0).abs() < 1e-5);
-        assert!((samples[6] - 1.0).abs() < 1e-5);
+        assert!((samples[6] - soft_clip(1.0)).abs() < 1e-5);
         assert!((samples[7] - 0.0).abs() < 1e-5);
     }
 }
