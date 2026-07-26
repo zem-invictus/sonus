@@ -281,11 +281,7 @@ impl PanningFilter {
         self.target_right_gain = target_right;
     }
 
-    pub fn process(&mut self, buffer: &mut BlockBuffer) {
-        if buffer.channels().get() != 2 {
-            return;
-        }
-
+    pub fn process_stereo(&mut self, buffer: &mut BlockBuffer) {
         let frames_count = buffer.frames_count();
         if frames_count == 0 {
             return;
@@ -306,6 +302,37 @@ impl PanningFilter {
         for frame_chunk in buffer.frames_mut() {
             frame_chunk[0] *= curr_left;
             frame_chunk[1] *= curr_right;
+
+            curr_left += step_left;
+            curr_right += step_right;
+        }
+
+        self.left_gain = self.target_left_gain;
+        self.right_gain = self.target_right_gain;
+    }
+
+    pub fn process_mono_to_stereo(&mut self, input: &BlockBuffer, output: &mut BlockBuffer) {
+        output.clear();
+        let samples_count = input.as_slice().len();
+        if samples_count == 0 {
+            return;
+        }
+
+        let inv_frames = if samples_count > 1 {
+            1.0 / (samples_count - 1) as f32
+        } else {
+            1.0
+        };
+
+        let step_left = (self.target_left_gain - self.left_gain) * inv_frames;
+        let step_right = (self.target_right_gain - self.right_gain) * inv_frames;
+
+        let mut curr_left = self.left_gain;
+        let mut curr_right = self.right_gain;
+
+        for &sample in input.as_slice() {
+            output.push(sample * curr_left);
+            output.push(sample * curr_right);
 
             curr_left += step_left;
             curr_right += step_right;
@@ -336,15 +363,19 @@ impl PanningChain {
         self.filter.set_targets(target_left, target_right);
     }
 
-    pub fn process(&mut self, buffer: &mut BlockBuffer) {
-        self.filter.process(buffer);
+    pub fn process_stereo(&mut self, buffer: &mut BlockBuffer) {
+        self.filter.process_stereo(buffer);
+    }
+
+    pub fn process_mono_to_stereo(&mut self, input: &BlockBuffer, output: &mut BlockBuffer) {
+        self.filter.process_mono_to_stereo(input, output);
     }
 }
 
 /// Contiguous audio block buffer managing multichannel sample storage.
 pub(crate) struct BlockBuffer {
     data: Vec<f32>,
-    read_index: u32,
+    read_index: usize,
     block_size: u16,
     channels: NonZero<u16>,
 }
@@ -380,9 +411,14 @@ impl BlockBuffer {
     }
 
     #[inline]
+    pub fn as_slice(&self) -> &[f32] {
+        &self.data
+    }
+
+    #[inline]
     pub fn push(&mut self, sample: f32) {
         debug_assert!(
-            self.data.len() < self.data.capacity(),
+            self.data.len() < self.capacity(),
             "BlockBuffer capacity exceeded"
         );
         self.data.push(sample);
@@ -390,7 +426,7 @@ impl BlockBuffer {
 
     #[inline]
     pub fn pop(&mut self) -> f32 {
-        let sample = self.data[self.read_index as usize];
+        let sample = self.data[self.read_index];
         self.read_index += 1;
         sample
     }
@@ -403,7 +439,7 @@ impl BlockBuffer {
 
     #[inline]
     pub fn is_exhausted(&self) -> bool {
-        self.read_index as usize >= self.data.len()
+        self.read_index >= self.data.len()
     }
 
     #[inline]
@@ -421,5 +457,41 @@ impl BlockBuffer {
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_panning_mono_upmix() {
+        let mut mono_buffer = BlockBuffer::new(4, NonZero::new(1).unwrap());
+        let mut stereo_buffer = BlockBuffer::new(4, NonZero::new(2).unwrap());
+        let mut mono_samples = vec![1.0, 1.0, 1.0, 1.0].into_iter();
+        mono_buffer.fill_from_iter(&mut mono_samples);
+
+        assert_eq!(mono_buffer.channels().get(), 1);
+        assert_eq!(mono_buffer.frames_count(), 4);
+
+        let mut panner = PanningFilter::new(1.0, 0.0);
+        panner.set_targets(1.0, 0.0);
+        panner.process_mono_to_stereo(&mono_buffer, &mut stereo_buffer);
+
+        assert_eq!(stereo_buffer.channels().get(), 2);
+        assert_eq!(stereo_buffer.frames_count(), 4);
+
+        let mut samples = Vec::new();
+        while !stereo_buffer.is_exhausted() {
+            samples.push(stereo_buffer.pop());
+        }
+
+        // Output should be interleaved stereo: [L, R, L, R, L, R, L, R]
+        // Left should be ~1.0, Right should be ~0.0
+        assert_eq!(samples.len(), 8);
+        assert!((samples[0] - 1.0).abs() < 1e-5);
+        assert!((samples[1] - 0.0).abs() < 1e-5);
+        assert!((samples[6] - 1.0).abs() < 1e-5);
+        assert!((samples[7] - 0.0).abs() < 1e-5);
     }
 }

@@ -57,7 +57,8 @@ impl Decodable for SonusSource {
 pub struct SpatialAudioChain<I: Source> {
     input: I,
     sample_rate: NonZero<u32>,
-    buffer: BlockBuffer,
+    input_buffer: BlockBuffer,
+    output_buffer: Option<BlockBuffer>,
     occlusion_chain: Option<OcclusionChain>,
     attenuation_chain: Option<AttenuationChain>,
     panning_chain: Option<PanningChain>,
@@ -70,12 +71,13 @@ impl<I: Source> SpatialAudioChain<I> {
             NonZero::new(input.channels().get()).expect("Number of audio source channels is 0!");
         let sample_rate =
             NonZero::new(input.sample_rate().get()).expect("Sample rate of audio source is 0!");
-        let buffer = BlockBuffer::new(512, channels);
+        let input_buffer = BlockBuffer::new(512, channels);
 
         Self {
             input,
             sample_rate,
-            buffer,
+            input_buffer,
+            output_buffer: None,
             occlusion_chain: None,
             attenuation_chain: None,
             panning_chain: None,
@@ -98,32 +100,41 @@ impl<I: Source> SpatialAudioChain<I> {
     }
 
     fn add_panning_chain(&mut self, control: Arc<PanningControl>) -> &mut Self {
+        if self.input_buffer.channels().get() == 1 {
+            let stereo_channels = NonZero::new(2).unwrap();
+            self.output_buffer = Some(BlockBuffer::new(512, stereo_channels));
+        }
         self.panning_chain = Some(PanningChain::new(control));
         self
     }
 
     fn fill_and_process_block(&mut self) -> Option<()> {
-        self.buffer.clear();
+        self.input_buffer.clear();
+        self.input_buffer.fill_from_iter(&mut self.input);
 
-        self.buffer.fill_from_iter(&mut self.input);
-
-        if self.buffer.is_empty() {
+        if self.input_buffer.is_empty() {
             return None;
         }
 
         if let Some(occlusion_chain) = &mut self.occlusion_chain {
             occlusion_chain.update();
-            occlusion_chain.process(&mut self.buffer);
+            occlusion_chain.process(&mut self.input_buffer);
         }
 
         if let Some(attenuation_chain) = &mut self.attenuation_chain {
             attenuation_chain.update();
-            attenuation_chain.process(&mut self.buffer);
+            attenuation_chain.process(&mut self.input_buffer);
         }
 
         if let Some(panning_chain) = &mut self.panning_chain {
             panning_chain.update();
-            panning_chain.process(&mut self.buffer);
+            if self.input_buffer.channels().get() == 1 {
+                if let Some(output_buffer) = &mut self.output_buffer {
+                    panning_chain.process_mono_to_stereo(&self.input_buffer, output_buffer);
+                }
+            } else {
+                panning_chain.process_stereo(&mut self.input_buffer);
+            }
         }
 
         Some(())
@@ -135,22 +146,40 @@ impl<I: Source> Iterator for SpatialAudioChain<I> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if self.buffer.is_exhausted() {
-            self.buffer.clear();
+        let active_buffer = if let Some(out_buf) = &mut self.output_buffer {
+            out_buf
+        } else {
+            &mut self.input_buffer
+        };
+
+        if active_buffer.is_exhausted() {
             self.fill_and_process_block()?;
         }
 
-        let sample = self.buffer.pop();
-        Some(sample)
+        let active_buffer = if let Some(out_buf) = &mut self.output_buffer {
+            out_buf
+        } else {
+            &mut self.input_buffer
+        };
+
+        Some(active_buffer.pop())
     }
 }
 
 impl<I: Source> Source for SpatialAudioChain<I> {
     fn current_span_len(&self) -> Option<usize> {
-        self.input.current_span_len()
+        if self.output_buffer.is_some() {
+            self.input.current_span_len().map(|len| len * 2)
+        } else {
+            self.input.current_span_len()
+        }
     }
     fn channels(&self) -> NonZero<u16> {
-        self.buffer.channels()
+        if self.output_buffer.is_some() {
+            NonZero::new(2).unwrap()
+        } else {
+            self.input_buffer.channels()
+        }
     }
     fn sample_rate(&self) -> NonZero<u32> {
         self.sample_rate

@@ -296,12 +296,8 @@ pub fn sonus_panning_system(
             (cos(phi), sin(phi))
         };
 
-        if (panning_control.left_gain.get() - left_gain).abs() > 0.001 {
-            panning_control.left_gain.set(left_gain);
-        }
-        if (panning_control.right_gain.get() - right_gain).abs() > 0.001 {
-            panning_control.right_gain.set(right_gain);
-        }
+        panning_control.left_gain.set(left_gain);
+        panning_control.right_gain.set(right_gain);
     }
 }
 
