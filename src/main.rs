@@ -6,6 +6,7 @@ use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnost
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
 use bevy::window::{CursorGrabMode, CursorOptions, PrimaryWindow};
+use bevy_inspector_egui::bevy_egui::EguiPlugin;
 use bevy_inspector_egui::quick::WorldInspectorPlugin;
 
 #[derive(Component)]
@@ -25,8 +26,9 @@ fn main() {
             SpatialAudioPlugin,
             FrameTimeDiagnosticsPlugin::default(),
             LogDiagnosticsPlugin::default(),
+            EguiPlugin::default(),
+            WorldInspectorPlugin::new(),
         ))
-        .add_plugins(WorldInspectorPlugin::new())
         .add_systems(Startup, setup_game)
         .add_systems(
             Update,

@@ -178,6 +178,8 @@ pub fn sonus_occlusion_system(
         let mut target_mid = 1.0f32;
         let mut target_high = 1.0f32;
 
+        let mut hit_count = 0;
+
         for (wall_transform, material) in wall_query.iter() {
             // Inverse world matrix converts world coordinates to obstacle local space
             let inv_matrix = wall_transform.to_matrix().inverse();
@@ -199,20 +201,29 @@ pub fn sonus_occlusion_system(
             if let Some(hit_dist) = local_ray.aabb_intersection_at(&local_aabb)
                 && hit_dist <= local_dist
             {
+                hit_count += 1;
                 target_low *= material.low_transmission;
                 target_mid *= material.mid_transmission;
                 target_high *= material.high_transmission;
             }
         }
 
-        if (occlusion_control.gain_low.get() - target_low).abs() > 0.01 {
+        let prev_low = occlusion_control.gain_low.get();
+        let prev_mid = occlusion_control.gain_mid.get();
+        let prev_high = occlusion_control.gain_high.get();
+
+        if (prev_low - target_low).abs() > 0.01
+            || (prev_mid - target_mid).abs() > 0.01
+            || (prev_high - target_high).abs() > 0.01
+        {
             occlusion_control.gain_low.set(target_low);
-        }
-        if (occlusion_control.gain_mid.get() - target_mid).abs() > 0.01 {
             occlusion_control.gain_mid.set(target_mid);
-        }
-        if (occlusion_control.gain_high.get() - target_high).abs() > 0.01 {
             occlusion_control.gain_high.set(target_high);
+
+            info!(
+                "[Occlusion State Changed] Hits: {} | Targets: Low={:.2}, Mid={:.2}, High={:.2}",
+                hit_count, target_low, target_mid, target_high
+            );
         }
     }
 }
@@ -287,17 +298,34 @@ pub fn sonus_panning_system(
         let to_emitter = emitter_transform.translation - listener_pos;
         let dist = to_emitter.length();
 
-        let (left_gain, right_gain) = if dist < 0.001 {
-            (std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2)
+        const MIN_FAR_EAR_GAIN: f32 = 0.25;
+
+        let (pan, left_gain, right_gain) = if dist < 0.001 {
+            let center_gain = MIN_FAR_EAR_GAIN.lerp(1.0, std::f32::consts::FRAC_1_SQRT_2);
+            (0.0, center_gain, center_gain)
         } else {
             let dir = to_emitter / dist;
             let pan = dir.dot(list_right).clamp(-1.0, 1.0);
             let phi = (pan + 1.0) * PI * 0.25;
-            (cos(phi), sin(phi))
+            let raw_left = cos(phi);
+            let raw_right = sin(phi);
+            let left = MIN_FAR_EAR_GAIN.lerp(1.0, raw_left);
+            let right = MIN_FAR_EAR_GAIN.lerp(1.0, raw_right);
+            (pan, left, right)
         };
 
-        panning_control.left_gain.set(left_gain);
-        panning_control.right_gain.set(right_gain);
+        let prev_left = panning_control.left_gain.get();
+        let prev_right = panning_control.right_gain.get();
+
+        if (prev_left - left_gain).abs() > 0.05 || (prev_right - right_gain).abs() > 0.05 {
+            panning_control.left_gain.set(left_gain);
+            panning_control.right_gain.set(right_gain);
+
+            info!(
+                "[Panning] Pos L: {:.1?}, E: {:.1?} | Pan: {:.2} | Left: {:.2}, Right: {:.2}",
+                listener_pos, emitter_transform.translation, pan, left_gain, right_gain
+            );
+        }
     }
 }
 

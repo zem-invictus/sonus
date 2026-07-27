@@ -196,6 +196,22 @@ impl OcclusionChain {
             return;
         }
 
+        // Fast path: if no occlusion filtering is active (all band gains are 1.0),
+        // bypass Biquad filtering to avoid phase cancellation and notch filter artifacts.
+        let is_unoccluded = (self.gain_low - 1.0).abs() < 1e-3
+            && (self.target_gain_low - 1.0).abs() < 1e-3
+            && (self.gain_mid - 1.0).abs() < 1e-3
+            && (self.target_gain_mid - 1.0).abs() < 1e-3
+            && (self.gain_high - 1.0).abs() < 1e-3
+            && (self.target_gain_high - 1.0).abs() < 1e-3;
+
+        if is_unoccluded {
+            self.gain_low = 1.0;
+            self.gain_mid = 1.0;
+            self.gain_high = 1.0;
+            return;
+        }
+
         let inv_frames = if frames_count > 1 {
             1.0 / (frames_count - 1) as f32
         } else {
@@ -505,5 +521,31 @@ mod tests {
         assert!((samples[1] - 0.0).abs() < 1e-5);
         assert!((samples[6] - soft_clip(1.0)).abs() < 1e-5);
         assert!((samples[7] - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_occlusion_chain_unoccluded_bypass() {
+        let control = Arc::new(OcclusionControl {
+            gain_low: crate::sonus::config::AudioParam::new(1.0),
+            gain_mid: crate::sonus::config::AudioParam::new(1.0),
+            gain_high: crate::sonus::config::AudioParam::new(1.0),
+        });
+
+        let mut occlusion_chain = OcclusionChain::new(1, 44100.0, control);
+        occlusion_chain.update();
+
+        let mut buffer = BlockBuffer::new(4, NonZero::new(1).unwrap());
+        let input_samples = vec![0.5, -0.2, 0.8, -0.9];
+        buffer.fill_from_iter(&mut input_samples.clone().into_iter());
+
+        occlusion_chain.process(&mut buffer);
+
+        let mut output_samples = Vec::new();
+        while !buffer.is_exhausted() {
+            output_samples.push(buffer.pop());
+        }
+
+        // When unoccluded, bypass must leave original samples intact
+        assert_eq!(output_samples, input_samples);
     }
 }
