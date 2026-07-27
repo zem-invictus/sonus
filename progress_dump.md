@@ -77,4 +77,4 @@ Polls the receiver using non-blocking `.try_recv()`, finds the corresponding `Sp
 Write a system that takes a standard loaded `AudioSource`, checks if a `SpatialAudioEmitter` needs to be initialized, converts the raw bytes into a `SpatialAudioSource`, inserts it into `Assets<SpatialAudioSource>`, and spawns Bevy's `AudioPlayer` to kick off playback and MPSC registration.
 
 ### Task 3: Raycast Occlusion System
-Write a system that traces rays from the `AudioListener` to active `SpatialAudioEmitter` entities, checks for intersections with `AudioOccluder` obstacles, calculates attenuation/cutoff, and writes the results to `emitter.control.biquad.cutoff_hz.set(...)` smoothly.
+Write a system that traces rays from the `SonusListener` to active `SpatialAudioEmitter` entities, checks for intersections with `AudioOccluder` obstacles, calculates attenuation/cutoff, and writes the results to `emitter.control.biquad.cutoff_hz.set(...)` smoothly.

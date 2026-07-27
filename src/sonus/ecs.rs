@@ -16,7 +16,7 @@ use bevy::math::ops::{cos, sin};
 
 /// Marker component for the active spatial audio listener entity.
 #[derive(Component)]
-pub struct AudioListener;
+pub struct SonusListener;
 
 /// Physical acoustic properties of an obstacle entity.
 #[derive(Component, Clone, Copy, Debug)]
@@ -159,7 +159,7 @@ pub(crate) fn sonus_audio_system(
 /// System for computing raycast intersections in the obstacle's local coordinate space.
 pub fn sonus_occlusion_system(
     emitter_query: Query<(&Transform, &SonusEmitter)>,
-    listener_query: Query<&Transform, With<AudioListener>>,
+    listener_query: Query<&Transform, With<SonusListener>>,
     wall_query: Query<(&Transform, &AcousticMaterial)>,
 ) {
     let Some(listener_transform) = listener_query.iter().next() else {
@@ -231,7 +231,7 @@ pub fn sonus_occlusion_system(
 /// System for computing distance-based audio attenuation and updating target volume gain.
 pub fn sonus_attenuation_system(
     emitter_query: Query<(&Transform, &SonusEmitter)>,
-    listener_query: Query<&Transform, With<AudioListener>>,
+    listener_query: Query<&Transform, With<SonusListener>>,
 ) {
     let Some(listener_transform) = listener_query.iter().next() else {
         return;
@@ -281,7 +281,7 @@ pub fn sonus_attenuation_system(
 
 pub fn sonus_panning_system(
     emitter_query: Query<(&Transform, &SonusEmitter)>,
-    listener_query: Query<&Transform, With<AudioListener>>,
+    listener_query: Query<&Transform, With<SonusListener>>,
 ) {
     let Some(listener_transform) = listener_query.iter().next() else {
         return;
