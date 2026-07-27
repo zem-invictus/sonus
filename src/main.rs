@@ -53,7 +53,7 @@ fn setup_game(
     mut cursor_options: Query<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
     commands.spawn(WorldAssetRoot(
-        asset_server.load(GltfAssetLabel::Scene(0).from_asset("scenes/test.gltf")),
+        asset_server.load(GltfAssetLabel::Scene(0).from_asset("scenes/test.glb")),
     ));
 
     if let Ok(mut cursor) = cursor_options.single_mut() {
@@ -61,21 +61,21 @@ fn setup_game(
         cursor.visible = false;
     }
 
-    commands.spawn((
-        Mesh3d(meshes.add(Sphere::new(0.5))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.2, 0.2, 0.8),
-            ..default()
-        })),
-        Transform::from_xyz(-5.0, 1.0, 0.0),
-        SonusEmitter::new("input.wav")
-            .with_occlusion()
-            .with_panning()
-            .with_attenuation(AttenuationModel::Linear {
-                min_dist: 2.0,
-                max_dist: 20.0,
-            }),
-    ));
+    // commands.spawn((
+    //     Mesh3d(meshes.add(Sphere::new(0.5))),
+    //     MeshMaterial3d(materials.add(StandardMaterial {
+    //         base_color: Color::srgb(0.2, 0.2, 0.8),
+    //         ..default()
+    //     })),
+    //     Transform::from_xyz(-5.0, 1.0, 0.0),
+    //     SonusEmitter::new("input.wav")
+    //         .with_occlusion()
+    //         .with_panning()
+    //         .with_attenuation(AttenuationModel::Linear {
+    //             min_dist: 2.0,
+    //             max_dist: 20.0,
+    //         }),
+    // ));
 
     commands.spawn((
         DirectionalLight::default(),
@@ -91,15 +91,6 @@ fn setup_game(
         Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 
-    commands.spawn((
-        Mesh3d(meshes.add(Cuboid::new(2.0, 3.0, 10.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.8, 0.2, 0.2),
-            ..default()
-        })),
-        Transform::from_xyz(0.0, 1.5, 0.0),
-        AcousticMaterial::new(Vec3::new(2.0, 3.0, 10.0), 0.8, 0.3, 0.05),
-    ));
 
     commands
         .spawn((

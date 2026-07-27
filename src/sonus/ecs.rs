@@ -15,11 +15,13 @@ use std::sync::Arc;
 use bevy::math::ops::{cos, sin};
 
 /// Marker component for the active spatial audio listener entity.
-#[derive(Component)]
+#[derive(Component, Reflect, Default)]
+#[reflect(Component, Default)]
 pub struct SonusListener;
 
 /// Physical acoustic properties of an obstacle entity.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, Reflect)]
+#[reflect(Component)]
 pub struct AcousticMaterial {
     pub half_extends: Vec3,
     pub low_transmission: f32,
@@ -84,6 +86,29 @@ impl From<Handle<AudioSource>> for SonusSourceInput {
 pub struct SonusEmitter {
     pub(crate) source: SonusSourceInput,
     pub(crate) control: Arc<SonusControl>,
+}
+
+/// Declarative configuration for spatial sound emitters loaded from Blender / Skein.
+#[derive(Component, Reflect, Clone, Debug)]
+#[reflect(Component, Default)]
+pub struct SonusEmitterConfig {
+    pub source_path: String,
+    pub occlusion: bool,
+    pub panning: bool,
+    pub min_dist: f32,
+    pub max_dist: f32,
+}
+
+impl Default for SonusEmitterConfig {
+    fn default() -> Self {
+        Self {
+            source_path: "input.wav".to_string(),
+            occlusion: true,
+            panning: true,
+            min_dist: 2.0,
+            max_dist: 20.0,
+        }
+    }
 }
 
 impl SonusEmitter {
@@ -329,19 +354,73 @@ pub fn sonus_panning_system(
     }
 }
 
+/// System detecting new `SonusEmitterConfig` components and instantiating runtime `SonusEmitter` components.
+pub fn sonus_emitter_config_system(
+    mut commands: Commands,
+    query: Query<(Entity, &SonusEmitterConfig), Added<SonusEmitterConfig>>,
+) {
+    for (entity, config) in query.iter() {
+        let mut emitter = SonusEmitter::new(&*config.source_path);
+        if config.occlusion {
+            emitter = emitter.with_occlusion();
+        }
+        if config.panning {
+            emitter = emitter.with_panning();
+        }
+        if config.max_dist > 0.0 {
+            emitter = emitter.with_attenuation(AttenuationModel::Linear {
+                min_dist: config.min_dist,
+                max_dist: config.max_dist,
+            });
+        }
+        commands.entity(entity).insert(emitter);
+    }
+}
+
 /// Bevy plugin registering spatial audio components and processing systems.
 pub struct SpatialAudioPlugin;
 
 impl Plugin for SpatialAudioPlugin {
     fn build(&self, app: &mut App) {
-        app.add_audio_source::<SonusSource>().add_systems(
-            Update,
-            (
-                sonus_audio_system,
-                sonus_occlusion_system,
-                sonus_attenuation_system,
-                sonus_panning_system,
-            ),
-        );
+        app.register_type::<AcousticMaterial>()
+            .register_type::<SonusListener>()
+            .register_type::<SonusEmitterConfig>()
+            .add_audio_source::<SonusSource>()
+            .add_systems(
+                Update,
+                (
+                    sonus_emitter_config_system,
+                    sonus_audio_system,
+                    sonus_occlusion_system,
+                    sonus_attenuation_system,
+                    sonus_panning_system,
+                ),
+            );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sonus_emitter_config_spawning() {
+        let mut app = App::new();
+        app.add_systems(Update, sonus_emitter_config_system);
+
+        let entity = app
+            .world_mut()
+            .spawn(SonusEmitterConfig {
+                source_path: "input.wav".to_string(),
+                occlusion: true,
+                panning: true,
+                min_dist: 2.0,
+                max_dist: 20.0,
+            })
+            .id();
+
+        app.update();
+
+        assert!(app.world().entity(entity).contains::<SonusEmitter>());
     }
 }

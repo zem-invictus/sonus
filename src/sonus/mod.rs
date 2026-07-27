@@ -8,4 +8,4 @@ pub mod dsp;
 pub mod ecs;
 pub mod source;
 
-pub use ecs::{AcousticMaterial, SonusListener, SonusEmitter, SpatialAudioPlugin};
+pub use ecs::{AcousticMaterial, SonusEmitterConfig, SonusListener, SonusEmitter, SpatialAudioPlugin};
