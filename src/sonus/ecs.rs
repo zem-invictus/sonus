@@ -405,6 +405,115 @@ pub fn sonus_emitter_config_system(
     }
 }
 
+/// System for rendering 3D spatial audio debug gizmos (attenuation spheres, raycast lines, wall AABBs).
+pub fn sonus_debug_gizmos_system(
+    mut gizmos: Gizmos,
+    emitter_query: Query<(&GlobalTransform, &SonusEmitter)>,
+    listener_query: Query<&GlobalTransform, With<SonusListener>>,
+    wall_query: Query<(
+        &GlobalTransform,
+        &AcousticMaterial,
+        Option<&Children>,
+        Option<&Aabb>,
+    )>,
+    mesh_aabb_query: Query<&Aabb>,
+) {
+    let Some(listener_transform) = listener_query.iter().next() else {
+        return;
+    };
+    let listener_pos = listener_transform.translation();
+
+    for (wall_transform, material, children, self_aabb) in wall_query.iter() {
+        let mut resolved_aabb = self_aabb.copied();
+        if resolved_aabb.is_none() {
+            if let Some(children) = children {
+                for &child in children {
+                    if let Ok(child_aabb) = mesh_aabb_query.get(child) {
+                        resolved_aabb = Some(*child_aabb);
+                        break;
+                    }
+                }
+            }
+        }
+        let center = resolved_aabb.map(|a| a.center.into()).unwrap_or(Vec3::ZERO);
+        let half_extents = resolved_aabb
+            .map(|a| a.half_extents.into())
+            .unwrap_or(material.half_extends);
+
+        let world_center = wall_transform.to_matrix().transform_point3(center);
+        let (wall_scale, wall_rot, _) = wall_transform.to_scale_rotation_translation();
+
+        gizmos.primitive_3d(
+            &Cuboid::from_size(half_extents * 2.0 * wall_scale),
+            Isometry3d::new(world_center, wall_rot),
+            Color::srgb(0.7, 0.2, 0.8),
+        );
+    }
+
+    for (emitter_transform, emitter) in emitter_query.iter() {
+        let emitter_pos = emitter_transform.translation();
+
+        if let Some(attenuation_control) = &emitter.control.attenuation_control {
+            if let AttenuationModel::Linear { min_dist, max_dist } = attenuation_control.model {
+                gizmos.sphere(
+                    Isometry3d::from_translation(emitter_pos),
+                    min_dist,
+                    Color::srgb(0.0, 1.0, 0.0),
+                );
+                gizmos.sphere(
+                    Isometry3d::from_translation(emitter_pos),
+                    max_dist,
+                    Color::srgb(1.0, 0.8, 0.0),
+                );
+            }
+        }
+
+        let mut is_occluded = false;
+        if emitter.control.occlusion_control.is_some() {
+            for (wall_transform, material, children, self_aabb) in wall_query.iter() {
+                let mut resolved_aabb = self_aabb.copied();
+                if resolved_aabb.is_none() {
+                    if let Some(children) = children {
+                        for &child in children {
+                            if let Ok(child_aabb) = mesh_aabb_query.get(child) {
+                                resolved_aabb = Some(*child_aabb);
+                                break;
+                            }
+                        }
+                    }
+                }
+                let center = resolved_aabb.map(|a| a.center.into()).unwrap_or(Vec3::ZERO);
+                let half_extents = resolved_aabb
+                    .map(|a| a.half_extents.into())
+                    .unwrap_or(material.half_extends);
+
+                let inv_matrix = wall_transform.to_matrix().inverse();
+                let local_emitter = inv_matrix.transform_point3(emitter_pos);
+                let local_listener = inv_matrix.transform_point3(listener_pos);
+                let local_delta = local_listener - local_emitter;
+                let local_dist = local_delta.length();
+                if let Ok(local_dir) = Dir3::new(local_delta) {
+                    let local_ray = RayCast3d::new(local_emitter, local_dir, local_dist);
+                    let local_aabb = Aabb3d::new(center, half_extents);
+                    if let Some(hit_dist) = local_ray.aabb_intersection_at(&local_aabb)
+                        && hit_dist <= local_dist
+                    {
+                        is_occluded = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        let line_color = if is_occluded {
+            Color::srgb(1.0, 0.0, 0.0)
+        } else {
+            Color::srgb(0.0, 1.0, 0.0)
+        };
+        gizmos.line(emitter_pos, listener_pos, line_color);
+    }
+}
+
 /// Bevy plugin registering spatial audio components and processing systems.
 pub struct SpatialAudioPlugin;
 
@@ -422,6 +531,7 @@ impl Plugin for SpatialAudioPlugin {
                     sonus_occlusion_system,
                     sonus_attenuation_system,
                     sonus_panning_system,
+                    sonus_debug_gizmos_system,
                 ),
             );
     }
