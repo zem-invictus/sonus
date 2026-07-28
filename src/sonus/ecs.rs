@@ -1,6 +1,5 @@
 //! Bevy ECS integration components, systems, and plugins for spatial audio.
 
-use std::f32::consts::PI;
 use crate::sonus::config::{
     AttenuationControl, AttenuationModel, AudioParam, OcclusionControl, PanningControl,
     SonusControl,
@@ -9,10 +8,12 @@ use crate::sonus::source::SonusSource;
 use bevy::app::App;
 use bevy::asset::Handle;
 use bevy::audio::{AddAudioSource, AudioSource};
+use bevy::camera::primitives::Aabb;
 use bevy::math::bounding::{Aabb3d, RayCast3d};
-use bevy::prelude::*;
-use std::sync::Arc;
 use bevy::math::ops::{cos, sin};
+use bevy::prelude::*;
+use std::f32::consts::PI;
+use std::sync::Arc;
 
 /// Marker component for the active spatial audio listener entity.
 #[derive(Component, Reflect, Default)]
@@ -183,21 +184,27 @@ pub(crate) fn sonus_audio_system(
 
 /// System for computing raycast intersections in the obstacle's local coordinate space.
 pub fn sonus_occlusion_system(
-    emitter_query: Query<(&Transform, &SonusEmitter)>,
-    listener_query: Query<&Transform, With<SonusListener>>,
-    wall_query: Query<(&Transform, &AcousticMaterial)>,
+    emitter_query: Query<(&GlobalTransform, &SonusEmitter)>,
+    listener_query: Query<&GlobalTransform, With<SonusListener>>,
+    wall_query: Query<(
+        &GlobalTransform,
+        &AcousticMaterial,
+        Option<&Children>,
+        Option<&Aabb>,
+    )>,
+    mesh_aabb_query: Query<&Aabb>,
 ) {
     let Some(listener_transform) = listener_query.iter().next() else {
         return;
     };
-    let listener_pos = listener_transform.translation;
+    let listener_pos = listener_transform.translation();
 
     for (emitter_transform, emitter) in emitter_query.iter() {
         let Some(occlusion_control) = &emitter.control.occlusion_control else {
             continue;
         };
 
-        let emitter_pos = emitter_transform.translation;
+        let emitter_pos = emitter_transform.translation();
 
         let mut target_low = 1.0f32;
         let mut target_mid = 1.0f32;
@@ -205,7 +212,24 @@ pub fn sonus_occlusion_system(
 
         let mut hit_count = 0;
 
-        for (wall_transform, material) in wall_query.iter() {
+        for (wall_transform, material, children, self_aabb) in wall_query.iter() {
+            let mut resolved_aabb = self_aabb.copied();
+            if resolved_aabb.is_none()
+                && let Some(children) = children
+            {
+                for &child in children {
+                    if let Ok(child_aabb) = mesh_aabb_query.get(child) {
+                        resolved_aabb = Some(*child_aabb);
+                        break;
+                    }
+                }
+            }
+
+            let center = resolved_aabb.map(|a| a.center.into()).unwrap_or(Vec3::ZERO);
+            let half_extends = resolved_aabb
+                .map(|a| a.half_extents.into())
+                .unwrap_or(material.half_extends);
+
             // Inverse world matrix converts world coordinates to obstacle local space
             let inv_matrix = wall_transform.to_matrix().inverse();
 
@@ -221,7 +245,7 @@ pub fn sonus_occlusion_system(
             let local_ray = RayCast3d::new(local_emitter, local_dir, local_dist);
 
             // Local AABB is centered at (0, 0, 0) in the obstacle's coordinate system
-            let local_aabb = Aabb3d::new(Vec3::ZERO, material.half_extends);
+            let local_aabb = Aabb3d::new(center, half_extends);
 
             if let Some(hit_dist) = local_ray.aabb_intersection_at(&local_aabb)
                 && hit_dist <= local_dist
@@ -255,8 +279,8 @@ pub fn sonus_occlusion_system(
 
 /// System for computing distance-based audio attenuation and updating target volume gain.
 pub fn sonus_attenuation_system(
-    emitter_query: Query<(&Transform, &SonusEmitter)>,
-    listener_query: Query<&Transform, With<SonusListener>>,
+    emitter_query: Query<(&GlobalTransform, &SonusEmitter)>,
+    listener_query: Query<&GlobalTransform, With<SonusListener>>,
 ) {
     let Some(listener_transform) = listener_query.iter().next() else {
         return;
@@ -268,8 +292,8 @@ pub fn sonus_attenuation_system(
         };
 
         let dist = listener_transform
-            .translation
-            .distance(emitter_transform.translation);
+            .translation()
+            .distance(emitter_transform.translation());
 
         let target_gain = match attenuation_control.model {
             AttenuationModel::None => 1.0,
@@ -305,22 +329,22 @@ pub fn sonus_attenuation_system(
 }
 
 pub fn sonus_panning_system(
-    emitter_query: Query<(&Transform, &SonusEmitter)>,
-    listener_query: Query<&Transform, With<SonusListener>>,
+    emitter_query: Query<(&GlobalTransform, &SonusEmitter)>,
+    listener_query: Query<&GlobalTransform, With<SonusListener>>,
 ) {
     let Some(listener_transform) = listener_query.iter().next() else {
         return;
     };
 
-    let listener_pos = listener_transform.translation;
-    let list_right = listener_transform.right().as_vec3();
+    let listener_pos = listener_transform.translation();
+    let list_right = listener_transform.right();
 
     for (emitter_transform, emitter) in emitter_query.iter() {
         let Some(panning_control) = &emitter.control.panning_control else {
             continue;
         };
 
-        let to_emitter = emitter_transform.translation - listener_pos;
+        let to_emitter = emitter_transform.translation() - listener_pos;
         let dist = to_emitter.length();
 
         const MIN_FAR_EAR_GAIN: f32 = 0.25;
@@ -330,7 +354,7 @@ pub fn sonus_panning_system(
             (0.0, center_gain, center_gain)
         } else {
             let dir = to_emitter / dist;
-            let pan = dir.dot(list_right).clamp(-1.0, 1.0);
+            let pan = dir.dot(*list_right).clamp(-1.0, 1.0);
             let phi = (pan + 1.0) * PI * 0.25;
             let raw_left = cos(phi);
             let raw_right = sin(phi);
@@ -348,7 +372,11 @@ pub fn sonus_panning_system(
 
             info!(
                 "[Panning] Pos L: {:.1?}, E: {:.1?} | Pan: {:.2} | Left: {:.2}, Right: {:.2}",
-                listener_pos, emitter_transform.translation, pan, left_gain, right_gain
+                listener_pos,
+                emitter_transform.translation(),
+                pan,
+                left_gain,
+                right_gain
             );
         }
     }

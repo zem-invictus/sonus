@@ -61,34 +61,9 @@ fn setup_game(
         cursor.visible = false;
     }
 
-    // commands.spawn((
-    //     Mesh3d(meshes.add(Sphere::new(0.5))),
-    //     MeshMaterial3d(materials.add(StandardMaterial {
-    //         base_color: Color::srgb(0.2, 0.2, 0.8),
-    //         ..default()
-    //     })),
-    //     Transform::from_xyz(-5.0, 1.0, 0.0),
-    //     SonusEmitter::new("input.wav")
-    //         .with_occlusion()
-    //         .with_panning()
-    //         .with_attenuation(AttenuationModel::Linear {
-    //             min_dist: 2.0,
-    //             max_dist: 20.0,
-    //         }),
-    // ));
-
     commands.spawn((
         DirectionalLight::default(),
         Transform::from_xyz(4.0, 10.0, 4.0).looking_at(Vec3::ZERO, Vec3::Y),
-    ));
-
-    commands.spawn((
-        Mesh3d(meshes.add(Plane3d::default().mesh().size(50.0, 50.0))),
-        MeshMaterial3d(materials.add(StandardMaterial {
-            base_color: Color::srgb(0.2, 0.5, 0.2),
-            ..default()
-        })),
-        Transform::from_xyz(0.0, 0.0, 0.0),
     ));
 
 
