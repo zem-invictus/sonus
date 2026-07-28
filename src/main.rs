@@ -1,7 +1,6 @@
 mod sonus;
 
-use crate::sonus::config::AttenuationModel;
-use crate::sonus::{AcousticMaterial, SonusEmitter, SonusListener, SpatialAudioPlugin};
+use crate::sonus::{SonusEmitter, SonusListener, SonusAudioPlugin};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
@@ -24,7 +23,7 @@ fn main() {
     App::new()
         .add_plugins((
             DefaultPlugins,
-            SpatialAudioPlugin,
+            SonusAudioPlugin::default().with_debug(),
             FrameTimeDiagnosticsPlugin::default(),
             LogDiagnosticsPlugin::default(),
             EguiPlugin::default(),
@@ -38,7 +37,6 @@ fn main() {
                 movement_system,
                 mouse_look_system,
                 cursor_toggle_system,
-                debug_visualize_occlusion,
                 fps_update_system,
             ),
         )
@@ -150,7 +148,7 @@ fn mouse_look_system(
         }
 
         if let Ok(mut camera_transform) = camera_query.single_mut() {
-            let (mut yaw, mut pitch, mut roll) = camera_transform.rotation.to_euler(EulerRot::YXZ);
+            let (yaw, mut pitch, roll) = camera_transform.rotation.to_euler(EulerRot::YXZ);
             pitch -= delta.y * sensitivity;
             pitch = pitch.clamp(-1.54, 1.54);
             camera_transform.rotation = Quat::from_euler(EulerRot::YXZ, yaw, pitch, roll);
@@ -176,34 +174,6 @@ fn cursor_toggle_system(
     }
 }
 
-/// Visual debug system changing listener mesh color to yellow when occlusion filtering is active.
-fn debug_visualize_occlusion(
-    emitter_query: Query<&SonusEmitter>,
-    listener_query: Query<&MeshMaterial3d<StandardMaterial>, With<SonusListener>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-) {
-    let Some(material_handle) = listener_query.iter().next() else {
-        return;
-    };
-
-    let mut is_any_occluded = false;
-    for emitter in emitter_query.iter() {
-        if let Some(occlusion_control) = &emitter.control.occlusion_control {
-            if occlusion_control.gain_high.get() < 0.9 {
-                is_any_occluded = true;
-                break;
-            }
-        }
-    }
-
-    if let Some(mut mat) = materials.get_mut(&material_handle.0) {
-        if is_any_occluded {
-            mat.base_color = Color::srgb(1.0, 1.0, 0.0);
-        } else {
-            mat.base_color = Color::srgb(1.0, 1.0, 1.0);
-        }
-    }
-}
 
 /// Diagnostic system updating the on-screen FPS display text.
 fn fps_update_system(

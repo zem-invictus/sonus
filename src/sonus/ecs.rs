@@ -515,9 +515,29 @@ pub fn sonus_debug_gizmos_system(
 }
 
 /// Bevy plugin registering spatial audio components and processing systems.
-pub struct SpatialAudioPlugin;
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SonusAudioPlugin {
+    pub debug: bool,
+}
 
-impl Plugin for SpatialAudioPlugin {
+impl Default for SonusAudioPlugin {
+    fn default() -> Self {
+        Self { debug: false }
+    }
+}
+
+impl SonusAudioPlugin {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_debug(mut self) -> Self {
+        self.debug = true;
+        self
+    }
+}
+
+impl Plugin for SonusAudioPlugin {
     fn build(&self, app: &mut App) {
         app.register_type::<AcousticMaterial>()
             .register_type::<SonusListener>()
@@ -531,9 +551,12 @@ impl Plugin for SpatialAudioPlugin {
                     sonus_occlusion_system,
                     sonus_attenuation_system,
                     sonus_panning_system,
-                    sonus_debug_gizmos_system,
                 ),
             );
+
+        if self.debug {
+            app.add_systems(Update, sonus_debug_gizmos_system);
+        }
     }
 }
 
