@@ -20,37 +20,124 @@ use std::sync::Arc;
 #[reflect(Component, Default)]
 pub struct SonusListener;
 
+/// Preset materials with predefined acoustic transmission properties across low, mid, and high frequency bands.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq, Reflect)]
+#[reflect(Component, Default)]
+pub enum AcousticMaterialPreset {
+    Wood,
+    Stone,
+    Concrete,
+    Glass,
+    Metal,
+    ThinPlaster,
+}
+
+impl Default for AcousticMaterialPreset {
+    fn default() -> Self {
+        Self::Wood
+    }
+}
+
+impl AcousticMaterialPreset {
+    /// Returns the acoustic material properties corresponding to this preset.
+    pub fn properties(&self) -> AcousticMaterial {
+        match self {
+            Self::Wood => AcousticMaterial {
+                low_transmission: 0.7,
+                mid_transmission: 0.4,
+                high_transmission: 0.2,
+            },
+            Self::Stone => AcousticMaterial {
+                low_transmission: 0.4,
+                mid_transmission: 0.1,
+                high_transmission: 0.02,
+            },
+            Self::Concrete => AcousticMaterial {
+                low_transmission: 0.2,
+                mid_transmission: 0.05,
+                high_transmission: 0.01,
+            },
+            Self::Glass => AcousticMaterial {
+                low_transmission: 0.9,
+                mid_transmission: 0.7,
+                high_transmission: 0.5,
+            },
+            Self::Metal => AcousticMaterial {
+                low_transmission: 0.3,
+                mid_transmission: 0.08,
+                high_transmission: 0.02,
+            },
+            Self::ThinPlaster => AcousticMaterial {
+                low_transmission: 0.85,
+                mid_transmission: 0.6,
+                high_transmission: 0.3,
+            },
+        }
+    }
+}
+
+impl From<AcousticMaterialPreset> for AcousticMaterial {
+    fn from(preset: AcousticMaterialPreset) -> Self {
+        preset.properties()
+    }
+}
+
 /// Physical acoustic properties of an obstacle entity.
 #[derive(Component, Clone, Copy, Debug, Reflect)]
 #[reflect(Component)]
 pub struct AcousticMaterial {
-    pub half_extends: Vec3,
     pub low_transmission: f32,
     pub mid_transmission: f32,
     pub high_transmission: f32,
 }
 
 impl AcousticMaterial {
-    /// Creates a new acoustic material with defined dimensions and 3-band transmission coefficients.
+    /// Creates a new acoustic material with defined 3-band transmission coefficients.
     pub fn new(
-        size: Vec3,
         low_transmission: f32,
         mid_transmission: f32,
         high_transmission: f32,
     ) -> Self {
         Self {
-            half_extends: size * 0.5,
             low_transmission,
             mid_transmission,
             high_transmission,
         }
+    }
+
+    /// Creates an acoustic material from a predefined preset.
+    pub fn preset(preset: AcousticMaterialPreset) -> Self {
+        preset.into()
+    }
+
+    pub fn wood() -> Self {
+        Self::preset(AcousticMaterialPreset::Wood)
+    }
+
+    pub fn stone() -> Self {
+        Self::preset(AcousticMaterialPreset::Stone)
+    }
+
+    pub fn concrete() -> Self {
+        Self::preset(AcousticMaterialPreset::Concrete)
+    }
+
+    pub fn glass() -> Self {
+        Self::preset(AcousticMaterialPreset::Glass)
+    }
+
+    pub fn metal() -> Self {
+        Self::preset(AcousticMaterialPreset::Metal)
+    }
+
+    pub fn thin_plaster() -> Self {
+        Self::preset(AcousticMaterialPreset::ThinPlaster)
     }
 }
 
 impl Default for AcousticMaterial {
     fn default() -> Self {
         Self {
-            half_extends: Vec3::splat(0.5),
             low_transmission: 1.0,
             mid_transmission: 1.0,
             high_transmission: 1.0,
@@ -225,10 +312,12 @@ pub fn sonus_occlusion_system(
                 }
             }
 
-            let center = resolved_aabb.map(|a| a.center.into()).unwrap_or(Vec3::ZERO);
-            let half_extends = resolved_aabb
-                .map(|a| a.half_extents.into())
-                .unwrap_or(material.half_extends);
+            let Some(aabb) = resolved_aabb else {
+                continue;
+            };
+
+            let center: Vec3 = aabb.center.into();
+            let half_extends: Vec3 = aabb.half_extents.into();
 
             // Inverse world matrix converts world coordinates to obstacle local space
             let inv_matrix = wall_transform.to_matrix().inverse();
@@ -244,7 +333,7 @@ pub fn sonus_occlusion_system(
             };
             let local_ray = RayCast3d::new(local_emitter, local_dir, local_dist);
 
-            // Local AABB is centered at (0, 0, 0) in the obstacle's coordinate system
+            // Local AABB is centered at center in the obstacle's coordinate system
             let local_aabb = Aabb3d::new(center, half_extends);
 
             if let Some(hit_dist) = local_ray.aabb_intersection_at(&local_aabb)
@@ -405,6 +494,16 @@ pub fn sonus_emitter_config_system(
     }
 }
 
+/// System detecting new `AcousticMaterialPreset` components and instantiating `AcousticMaterial` components.
+pub fn sonus_material_preset_system(
+    mut commands: Commands,
+    query: Query<(Entity, &AcousticMaterialPreset), Added<AcousticMaterialPreset>>,
+) {
+    for (entity, preset) in query.iter() {
+        commands.entity(entity).insert(AcousticMaterial::from(*preset));
+    }
+}
+
 /// System for rendering 3D spatial audio debug gizmos (attenuation spheres, raycast lines, wall AABBs).
 pub fn sonus_debug_gizmos_system(
     mut gizmos: Gizmos,
@@ -435,10 +534,13 @@ pub fn sonus_debug_gizmos_system(
                 }
             }
         }
-        let center = resolved_aabb.map(|a| a.center.into()).unwrap_or(Vec3::ZERO);
-        let half_extents = resolved_aabb
-            .map(|a| a.half_extents.into())
-            .unwrap_or(material.half_extends);
+        
+        let Some(aabb) = resolved_aabb else {
+            continue;
+        };
+
+        let center: Vec3 = aabb.center.into();
+        let half_extents: Vec3 = aabb.half_extents.into();
 
         let world_center = wall_transform.to_matrix().transform_point3(center);
         let (wall_scale, wall_rot, _) = wall_transform.to_scale_rotation_translation();
@@ -482,10 +584,13 @@ pub fn sonus_debug_gizmos_system(
                         }
                     }
                 }
-                let center = resolved_aabb.map(|a| a.center.into()).unwrap_or(Vec3::ZERO);
-                let half_extents = resolved_aabb
-                    .map(|a| a.half_extents.into())
-                    .unwrap_or(material.half_extends);
+
+                let Some(aabb) = resolved_aabb else {
+                    continue;
+                };
+
+                let center: Vec3 = aabb.center.into();
+                let half_extents: Vec3 = aabb.half_extents.into();
 
                 let inv_matrix = wall_transform.to_matrix().inverse();
                 let local_emitter = inv_matrix.transform_point3(emitter_pos);
@@ -495,8 +600,9 @@ pub fn sonus_debug_gizmos_system(
                 if let Ok(local_dir) = Dir3::new(local_delta) {
                     let local_ray = RayCast3d::new(local_emitter, local_dir, local_dist);
                     let local_aabb = Aabb3d::new(center, half_extents);
-                    if let Some(hit_dist) = local_ray.aabb_intersection_at(&local_aabb)
-                        && hit_dist <= local_dist
+                    if local_ray
+                        .aabb_intersection_at(&local_aabb)
+                        .is_some_and(|hit| hit <= local_dist)
                     {
                         is_occluded = true;
                         break;
@@ -539,14 +645,12 @@ impl SonusAudioPlugin {
 
 impl Plugin for SonusAudioPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<AcousticMaterial>()
-            .register_type::<SonusListener>()
-            .register_type::<SonusEmitterConfig>()
-            .add_audio_source::<SonusSource>()
+        app.add_audio_source::<SonusSource>()
             .add_systems(
                 Update,
                 (
                     sonus_emitter_config_system,
+                    sonus_material_preset_system,
                     sonus_audio_system,
                     sonus_occlusion_system,
                     sonus_attenuation_system,
@@ -583,5 +687,30 @@ mod tests {
         app.update();
 
         assert!(app.world().entity(entity).contains::<SonusEmitter>());
+    }
+
+    #[test]
+    fn test_acoustic_material_presets() {
+        let wood = AcousticMaterial::wood();
+        let wood_from_preset: AcousticMaterial = AcousticMaterialPreset::Wood.into();
+        assert_eq!(wood.low_transmission, wood_from_preset.low_transmission);
+        assert_eq!(wood.mid_transmission, wood_from_preset.mid_transmission);
+        assert_eq!(wood.high_transmission, wood_from_preset.high_transmission);
+
+        let concrete = AcousticMaterial::concrete();
+        assert_eq!(concrete.low_transmission, 0.2);
+    }
+
+    #[test]
+    fn test_sonus_material_preset_spawning() {
+        let mut app = App::new();
+        app.add_systems(Update, sonus_material_preset_system);
+
+        let entity = app.world_mut().spawn(AcousticMaterialPreset::Stone).id();
+        app.update();
+
+        let mat = app.world().entity(entity).get::<AcousticMaterial>();
+        assert!(mat.is_some());
+        assert_eq!(mat.unwrap().low_transmission, 0.4);
     }
 }
