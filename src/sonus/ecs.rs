@@ -10,9 +10,7 @@ use bevy::asset::Handle;
 use bevy::audio::{AddAudioSource, AudioSource};
 use bevy::camera::primitives::Aabb;
 use bevy::math::bounding::{Aabb3d, RayCast3d};
-use bevy::math::ops::{cos, sin};
 use bevy::prelude::*;
-use std::f32::consts::PI;
 use std::sync::Arc;
 
 /// Marker component for the active spatial audio listener entity.
@@ -93,11 +91,7 @@ pub struct AcousticMaterial {
 
 impl AcousticMaterial {
     /// Creates a new acoustic material with defined 3-band transmission coefficients.
-    pub fn new(
-        low_transmission: f32,
-        mid_transmission: f32,
-        high_transmission: f32,
-    ) -> Self {
+    pub fn new(low_transmission: f32, mid_transmission: f32, high_transmission: f32) -> Self {
         Self {
             low_transmission,
             mid_transmission,
@@ -269,9 +263,71 @@ pub(crate) fn sonus_audio_system(
     }
 }
 
+///// Helper function for resolving AABB component from an entity or its children.
+fn resolve_aabb(
+    self_aabb: Option<&Aabb>,
+    children: Option<&Children>,
+    mesh_aabb_query: &Query<&Aabb>,
+) -> Option<Aabb> {
+    if let Some(aabb) = self_aabb {
+        return Some(*aabb);
+    }
+    if let Some(children) = children {
+        for &child in children {
+            if let Ok(child_aabb) = mesh_aabb_query.get(child) {
+                return Some(*child_aabb);
+            }
+        }
+    }
+    None
+}
+
+/// Helper function to compute a 5-ray cross pattern facing the target.
+fn compute_cross_pattern_rays(origin: Vec3, target: Vec3, radius: f32) -> [Vec3; 5] {
+    let delta = target - origin;
+    let dir_to_target = delta.normalize_or_zero();
+    let right = dir_to_target.cross(Vec3::Y).normalize_or_zero();
+    let up = dir_to_target.cross(right).normalize_or_zero();
+
+    [
+        origin,
+        origin + right * radius,
+        origin - right * radius,
+        origin + up * radius,
+        origin - up * radius,
+    ]
+}
+
+/// Helper function to count ray intersections against a local AABB obstacle.
+fn count_wall_hits(
+    rays: &[Vec3],
+    local_listener: Vec3,
+    local_aabb: &Aabb3d,
+) -> usize {
+    let mut hits = 0;
+    for &ray in rays {
+        let local_delta = local_listener - ray;
+        let local_dist = local_delta.length();
+        if let Ok(local_dir) = Dir3::new(local_delta) {
+            let local_ray = RayCast3d::new(ray, local_dir, local_dist);
+            if let Some(hit_dist) = local_ray.aabb_intersection_at(local_aabb) {
+                if hit_dist <= local_dist {
+                    hits += 1;
+                }
+            }
+        }
+    }
+    hits
+}
+
 /// System for computing raycast intersections in the obstacle's local coordinate space.
 pub fn sonus_occlusion_system(
-    emitter_query: Query<(&GlobalTransform, &SonusEmitter)>,
+    emitter_query: Query<(
+        &GlobalTransform,
+        &SonusEmitter,
+        Option<&Children>,
+        Option<&Aabb>,
+    )>,
     listener_query: Query<&GlobalTransform, With<SonusListener>>,
     wall_query: Query<(
         &GlobalTransform,
@@ -286,12 +342,19 @@ pub fn sonus_occlusion_system(
     };
     let listener_pos = listener_transform.translation();
 
-    for (emitter_transform, emitter) in emitter_query.iter() {
+    for (emitter_transform, emitter, emitter_children, self_emitter_aabb) in emitter_query.iter() {
         let Some(occlusion_control) = &emitter.control.occlusion_control else {
             continue;
         };
 
         let emitter_pos = emitter_transform.translation();
+
+        let resolved_emitter_aabb =
+            resolve_aabb(self_emitter_aabb, emitter_children, &mesh_aabb_query);
+
+        let emitter_radius = resolved_emitter_aabb
+            .map(|a| a.half_extents.max_element())
+            .unwrap_or(0.5);
 
         let mut target_low = 1.0f32;
         let mut target_mid = 1.0f32;
@@ -300,49 +363,30 @@ pub fn sonus_occlusion_system(
         let mut hit_count = 0;
 
         for (wall_transform, material, children, self_aabb) in wall_query.iter() {
-            let mut resolved_aabb = self_aabb.copied();
-            if resolved_aabb.is_none()
-                && let Some(children) = children
-            {
-                for &child in children {
-                    if let Ok(child_aabb) = mesh_aabb_query.get(child) {
-                        resolved_aabb = Some(*child_aabb);
-                        break;
-                    }
-                }
-            }
-
-            let Some(aabb) = resolved_aabb else {
+            let Some(aabb) = resolve_aabb(self_aabb, children, &mesh_aabb_query) else {
                 continue;
             };
 
             let center: Vec3 = aabb.center.into();
             let half_extends: Vec3 = aabb.half_extents.into();
+            let local_aabb = Aabb3d::new(center, half_extends);
 
-            // Inverse world matrix converts world coordinates to obstacle local space
             let inv_matrix = wall_transform.to_matrix().inverse();
 
             let local_emitter = inv_matrix.transform_point3(emitter_pos);
             let local_listener = inv_matrix.transform_point3(listener_pos);
 
-            let local_delta = local_listener - local_emitter;
-            let local_dist = local_delta.length();
+            let rays = compute_cross_pattern_rays(local_emitter, local_listener, emitter_radius);
+            let wall_hits = count_wall_hits(&rays, local_listener, &local_aabb);
 
-            let Ok(local_dir) = Dir3::new(local_delta) else {
-                continue;
-            };
-            let local_ray = RayCast3d::new(local_emitter, local_dir, local_dist);
+            if wall_hits > 0 {
+                let obstruction_ratio = wall_hits as f32 / rays.len() as f32;
 
-            // Local AABB is centered at center in the obstacle's coordinate system
-            let local_aabb = Aabb3d::new(center, half_extends);
+                target_low *= 1.0f32.lerp(material.low_transmission, obstruction_ratio);
+                target_mid *= 1.0f32.lerp(material.mid_transmission, obstruction_ratio);
+                target_high *= 1.0f32.lerp(material.high_transmission, obstruction_ratio);
 
-            if let Some(hit_dist) = local_ray.aabb_intersection_at(&local_aabb)
-                && hit_dist <= local_dist
-            {
-                hit_count += 1;
-                target_low *= material.low_transmission;
-                target_mid *= material.mid_transmission;
-                target_high *= material.high_transmission;
+                hit_count += wall_hits;
             }
         }
 
@@ -443,30 +487,23 @@ pub fn sonus_panning_system(
             (0.0, center_gain, center_gain)
         } else {
             let dir = to_emitter / dist;
-            let pan = dir.dot(*list_right).clamp(-1.0, 1.0);
-            let phi = (pan + 1.0) * PI * 0.25;
-            let raw_left = cos(phi);
-            let raw_right = sin(phi);
-            let left = MIN_FAR_EAR_GAIN.lerp(1.0, raw_left);
-            let right = MIN_FAR_EAR_GAIN.lerp(1.0, raw_right);
-            (pan, left, right)
+            let pan = dir.dot(*list_right);
+
+            let normalized_pan = (pan + 1.0) / 2.0;
+
+            let left_gain =
+                MIN_FAR_EAR_GAIN.lerp(1.0, (1.0 - normalized_pan).sqrt().clamp(0.0, 1.0));
+            let right_gain = MIN_FAR_EAR_GAIN.lerp(1.0, normalized_pan.sqrt().clamp(0.0, 1.0));
+
+            (pan, left_gain, right_gain)
         };
 
-        let prev_left = panning_control.left_gain.get();
-        let prev_right = panning_control.right_gain.get();
+        let current_left = panning_control.left_gain.get();
+        let current_right = panning_control.right_gain.get();
 
-        if (prev_left - left_gain).abs() > 0.05 || (prev_right - right_gain).abs() > 0.05 {
+        if (current_left - left_gain).abs() > 0.001 || (current_right - right_gain).abs() > 0.001 {
             panning_control.left_gain.set(left_gain);
             panning_control.right_gain.set(right_gain);
-
-            info!(
-                "[Panning] Pos L: {:.1?}, E: {:.1?} | Pan: {:.2} | Left: {:.2}, Right: {:.2}",
-                listener_pos,
-                emitter_transform.translation(),
-                pan,
-                left_gain,
-                right_gain
-            );
         }
     }
 }
@@ -500,14 +537,21 @@ pub fn sonus_material_preset_system(
     query: Query<(Entity, &AcousticMaterialPreset), Added<AcousticMaterialPreset>>,
 ) {
     for (entity, preset) in query.iter() {
-        commands.entity(entity).insert(AcousticMaterial::from(*preset));
+        commands
+            .entity(entity)
+            .insert(AcousticMaterial::from(*preset));
     }
 }
 
 /// System for rendering 3D spatial audio debug gizmos (attenuation spheres, raycast lines, wall AABBs).
 pub fn sonus_debug_gizmos_system(
     mut gizmos: Gizmos,
-    emitter_query: Query<(&GlobalTransform, &SonusEmitter)>,
+    emitter_query: Query<(
+        &GlobalTransform,
+        &SonusEmitter,
+        Option<&Children>,
+        Option<&Aabb>,
+    )>,
     listener_query: Query<&GlobalTransform, With<SonusListener>>,
     wall_query: Query<(
         &GlobalTransform,
@@ -522,20 +566,8 @@ pub fn sonus_debug_gizmos_system(
     };
     let listener_pos = listener_transform.translation();
 
-    for (wall_transform, material, children, self_aabb) in wall_query.iter() {
-        let mut resolved_aabb = self_aabb.copied();
-        if resolved_aabb.is_none() {
-            if let Some(children) = children {
-                for &child in children {
-                    if let Ok(child_aabb) = mesh_aabb_query.get(child) {
-                        resolved_aabb = Some(*child_aabb);
-                        break;
-                    }
-                }
-            }
-        }
-        
-        let Some(aabb) = resolved_aabb else {
+    for (wall_transform, _material, children, self_aabb) in wall_query.iter() {
+        let Some(aabb) = resolve_aabb(self_aabb, children, &mesh_aabb_query) else {
             continue;
         };
 
@@ -552,7 +584,7 @@ pub fn sonus_debug_gizmos_system(
         );
     }
 
-    for (emitter_transform, emitter) in emitter_query.iter() {
+    for (emitter_transform, emitter, emitter_children, self_emitter_aabb) in emitter_query.iter() {
         let emitter_pos = emitter_transform.translation();
 
         if let Some(attenuation_control) = &emitter.control.attenuation_control {
@@ -570,51 +602,46 @@ pub fn sonus_debug_gizmos_system(
             }
         }
 
-        let mut is_occluded = false;
+        let mut max_obstruction_ratio = 0.0f32;
         if emitter.control.occlusion_control.is_some() {
-            for (wall_transform, material, children, self_aabb) in wall_query.iter() {
-                let mut resolved_aabb = self_aabb.copied();
-                if resolved_aabb.is_none() {
-                    if let Some(children) = children {
-                        for &child in children {
-                            if let Ok(child_aabb) = mesh_aabb_query.get(child) {
-                                resolved_aabb = Some(*child_aabb);
-                                break;
-                            }
-                        }
-                    }
-                }
+            let resolved_emitter_aabb =
+                resolve_aabb(self_emitter_aabb, emitter_children, &mesh_aabb_query);
 
-                let Some(aabb) = resolved_aabb else {
+            let emitter_radius = resolved_emitter_aabb
+                .map(|a| a.half_extents.max_element())
+                .unwrap_or(0.5);
+
+            for (wall_transform, _material, children, self_aabb) in wall_query.iter() {
+                let Some(aabb) = resolve_aabb(self_aabb, children, &mesh_aabb_query) else {
                     continue;
                 };
 
                 let center: Vec3 = aabb.center.into();
                 let half_extents: Vec3 = aabb.half_extents.into();
+                let local_aabb = Aabb3d::new(center, half_extents);
 
                 let inv_matrix = wall_transform.to_matrix().inverse();
                 let local_emitter = inv_matrix.transform_point3(emitter_pos);
                 let local_listener = inv_matrix.transform_point3(listener_pos);
-                let local_delta = local_listener - local_emitter;
-                let local_dist = local_delta.length();
-                if let Ok(local_dir) = Dir3::new(local_delta) {
-                    let local_ray = RayCast3d::new(local_emitter, local_dir, local_dist);
-                    let local_aabb = Aabb3d::new(center, half_extents);
-                    if local_ray
-                        .aabb_intersection_at(&local_aabb)
-                        .is_some_and(|hit| hit <= local_dist)
-                    {
-                        is_occluded = true;
-                        break;
-                    }
+
+                let rays =
+                    compute_cross_pattern_rays(local_emitter, local_listener, emitter_radius);
+                let wall_hits = count_wall_hits(&rays, local_listener, &local_aabb);
+
+                let ratio = wall_hits as f32 / rays.len() as f32;
+                if ratio > max_obstruction_ratio {
+                    max_obstruction_ratio = ratio;
                 }
             }
         }
 
-        let line_color = if is_occluded {
-            Color::srgb(1.0, 0.0, 0.0)
+        let line_color = if max_obstruction_ratio == 0.0 {
+            Color::srgb(0.0, 1.0, 0.0) // Clear: Green
+        } else if max_obstruction_ratio >= 1.0 {
+            Color::srgb(1.0, 0.0, 0.0) // Fully blocked: Red
         } else {
-            Color::srgb(0.0, 1.0, 0.0)
+            // Partially blocked: Orange / Yellow gradient
+            Color::srgb(1.0, 0.6, 0.0)
         };
         gizmos.line(emitter_pos, listener_pos, line_color);
     }
@@ -645,18 +672,17 @@ impl SonusAudioPlugin {
 
 impl Plugin for SonusAudioPlugin {
     fn build(&self, app: &mut App) {
-        app.add_audio_source::<SonusSource>()
-            .add_systems(
-                Update,
-                (
-                    sonus_emitter_config_system,
-                    sonus_material_preset_system,
-                    sonus_audio_system,
-                    sonus_occlusion_system,
-                    sonus_attenuation_system,
-                    sonus_panning_system,
-                ),
-            );
+        app.add_audio_source::<SonusSource>().add_systems(
+            Update,
+            (
+                sonus_emitter_config_system,
+                sonus_material_preset_system,
+                sonus_audio_system,
+                sonus_occlusion_system,
+                sonus_attenuation_system,
+                sonus_panning_system,
+            ),
+        );
 
         if self.debug {
             app.add_systems(Update, sonus_debug_gizmos_system);
