@@ -1,5 +1,5 @@
 [package]
-name = "sonus"
+name = "bevy_sonus"
 version = "0.1.0"
 edition = "2024"
 authors = ["zem-invictus <vovazms@gmail.com>"]

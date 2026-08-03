@@ -1629,6 +1629,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_sonus"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy-inspector-egui",
+ "bevy_skein",
+ "hound",
+ "ringbuf",
+ "rodio",
+]
+
+[[package]]
 name = "bevy_sprite"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5219,18 +5231,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dd538fb6910ac1099850255cf94a94df6551fbdd602454387d0adb2d1ca6dead"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "sonus"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy-inspector-egui",
- "bevy_skein",
- "hound",
- "ringbuf",
- "rodio",
 ]
 
 [[package]]

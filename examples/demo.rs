@@ -1,4 +1,4 @@
-use sonus::{SonusAudioPlugin, SonusListener};
+use bevy_sonus::{SonusAudioPlugin, SonusListener};
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin, LogDiagnosticsPlugin};
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
