@@ -7,7 +7,7 @@ description = "A real-time spatial audio plugin for Bevy Engine featuring multi-
 repository = "https://github.com/zem-invictus/sonus"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-exclude = ["assets/scenes/*.blend*"]
+exclude = ["assets/*", "examples/*"]
 keywords = ["bevy", "audio", "spatial", "occlusion", "dsp"]
 categories = ["multimedia::audio", "game-development"]
 
