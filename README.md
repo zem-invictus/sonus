@@ -1,7 +1,7 @@
-# sonus
+# bevy_sonus
 
-[![Crates.io](https://img.shields.io/crates/v/sonus.svg)](https://crates.io/crates/sonus)
-[![Documentation](https://docs.rs/sonus/badge.svg)](https://docs.rs/sonus)
+[![Crates.io](https://img.shields.io/crates/v/bevy_sonus.svg)](https://crates.io/crates/bevy_sonus)
+[![Documentation](https://docs.rs/bevy_sonus/badge.svg)](https://docs.rs/bevy_sonus)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
 A high-performance, real-time spatial audio plugin for the [Bevy Engine](https://bevyengine.org).
@@ -20,19 +20,19 @@ Features:
 
 ## Quickstart
 
-Add `sonus` to your `Cargo.toml`:
+Add `bevy_sonus` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 bevy = "0.19"
-sonus = "0.1"
+bevy_sonus = "0.1"
 ```
 
 ### 1. Spawning Listener & Emitter Programmatically
 
 ```rust
 use bevy::prelude::*;
-use sonus::{AttenuationModel, AcousticMaterialPreset, SonusAudioPlugin, SonusEmitter, SonusListener};
+use bevy_sonus::{AttenuationModel, AcousticMaterialPreset, SonusAudioPlugin, SonusEmitter, SonusListener};
 
 fn main() {
     App::new()
