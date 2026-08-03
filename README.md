@@ -90,11 +90,14 @@ App::new()
 * **Green sphere**: Minimum distance ($d_{\text{min}}$) with zero attenuation.
 * **Yellow sphere**: Maximum distance ($d_{\text{max}}$) cutoff point.
 
-## Blender Workflow
+## Blender & Skein Workflow
 
-1. Attach `SonusEmitterConfig` to empty objects or meshes in Blender.
-2. Attach `AcousticMaterialPreset` or `AcousticMaterial` to obstacle meshes.
-3. Export scene as `.gltf` / `.glb` and load via `bevy_skein`.
+`bevy_sonus` integrates with [bevy_skein](https://crates.io/crates/bevy_skein) to deserialize components directly from GLTF custom properties:
+
+1. Attach `SonusEmitterConfig` to empty nodes or mesh objects in Blender.
+2. Attach `AcousticMaterialPreset` or custom `AcousticMaterial` to obstacle meshes.
+3. Export the scene as `.gltf` or `.glb`.
+4. Load the scene using `bevy_skein` to automatically instantiate sound emitters and acoustic obstacles at runtime.
 
 ## License
 
