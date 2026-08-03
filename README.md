@@ -1,6 +1,6 @@
 # bevy_sonus
 
-[![Crates.io](https://img.shields.io/crates/v/bevy_sonus.svg)](https://crates.io/crates/bevy_sonus)
+[![Crates.io](https://img.shields.io/crates/v/bevy_sonus)](https://crates.io/crates/bevy_sonus)
 [![Documentation](https://docs.rs/bevy_sonus/badge.svg)](https://docs.rs/bevy_sonus)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
