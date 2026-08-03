@@ -529,6 +529,9 @@ mod tests {
             gain_low: crate::sonus::config::AudioParam::new(1.0),
             gain_mid: crate::sonus::config::AudioParam::new(1.0),
             gain_high: crate::sonus::config::AudioParam::new(1.0),
+            perceived_dir_x: crate::sonus::config::AudioParam::new(0.0),
+            perceived_dir_y: crate::sonus::config::AudioParam::new(0.0),
+            perceived_dir_z: crate::sonus::config::AudioParam::new(0.0),
         });
 
         let mut occlusion_chain = OcclusionChain::new(1, 44100.0, control);

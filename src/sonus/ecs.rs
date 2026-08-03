@@ -212,6 +212,9 @@ impl SonusEmitter {
             gain_low: AudioParam::new(1.0),
             gain_mid: AudioParam::new(1.0),
             gain_high: AudioParam::new(1.0),
+            perceived_dir_x: AudioParam::new(0.0),
+            perceived_dir_y: AudioParam::new(0.0),
+            perceived_dir_z: AudioParam::new(0.0),
         }));
         self
     }
@@ -360,6 +363,8 @@ pub fn sonus_occlusion_system(
         let mut target_mid = 1.0f32;
         let mut target_high = 1.0f32;
 
+        let rays_world = compute_cross_pattern_rays(emitter_pos, listener_pos, emitter_radius);
+        let mut ray_weights = [1.0f32; 5];
         let mut hit_count = 0;
 
         for (wall_transform, material, children, self_aabb) in wall_query.iter() {
@@ -372,15 +377,27 @@ pub fn sonus_occlusion_system(
             let local_aabb = Aabb3d::new(center, half_extends);
 
             let inv_matrix = wall_transform.to_matrix().inverse();
-
-            let local_emitter = inv_matrix.transform_point3(emitter_pos);
             let local_listener = inv_matrix.transform_point3(listener_pos);
 
-            let rays = compute_cross_pattern_rays(local_emitter, local_listener, emitter_radius);
-            let wall_hits = count_wall_hits(&rays, local_listener, &local_aabb);
+            let mut wall_hits = 0;
+            for (i, &ray_world_origin) in rays_world.iter().enumerate() {
+                let local_ray_origin = inv_matrix.transform_point3(ray_world_origin);
+                let local_delta = local_listener - local_ray_origin;
+                let local_dist = local_delta.length();
+
+                if let Ok(local_dir) = Dir3::new(local_delta) {
+                    let local_ray = RayCast3d::new(local_ray_origin, local_dir, local_dist);
+                    if let Some(hit_dist) = local_ray.aabb_intersection_at(&local_aabb) {
+                        if hit_dist <= local_dist {
+                            wall_hits += 1;
+                            ray_weights[i] *= material.mid_transmission;
+                        }
+                    }
+                }
+            }
 
             if wall_hits > 0 {
-                let obstruction_ratio = wall_hits as f32 / rays.len() as f32;
+                let obstruction_ratio = wall_hits as f32 / rays_world.len() as f32;
 
                 target_low *= 1.0f32.lerp(material.low_transmission, obstruction_ratio);
                 target_mid *= 1.0f32.lerp(material.mid_transmission, obstruction_ratio);
@@ -389,6 +406,25 @@ pub fn sonus_occlusion_system(
                 hit_count += wall_hits;
             }
         }
+
+        let mut weighted_dir_sum = Vec3::ZERO;
+        let mut total_weight = 0.0f32;
+        for (i, &ray_world_origin) in rays_world.iter().enumerate() {
+            let weight = ray_weights[i];
+            let dir_from_listener = (ray_world_origin - listener_pos).normalize_or_zero();
+            weighted_dir_sum += dir_from_listener * weight;
+            total_weight += weight;
+        }
+
+        let perceived_dir = if total_weight > 0.001 {
+            weighted_dir_sum.normalize_or_zero()
+        } else {
+            (emitter_pos - listener_pos).normalize_or_zero()
+        };
+
+        occlusion_control.perceived_dir_x.set(perceived_dir.x);
+        occlusion_control.perceived_dir_y.set(perceived_dir.y);
+        occlusion_control.perceived_dir_z.set(perceived_dir.z);
 
         let prev_low = occlusion_control.gain_low.get();
         let prev_mid = occlusion_control.gain_mid.get();
@@ -477,18 +513,28 @@ pub fn sonus_panning_system(
             continue;
         };
 
-        let to_emitter = emitter_transform.translation() - listener_pos;
-        let dist = to_emitter.length();
+        let perceived_dir = if let Some(occlusion_control) = &emitter.control.occlusion_control {
+            let px = occlusion_control.perceived_dir_x.get();
+            let py = occlusion_control.perceived_dir_y.get();
+            let pz = occlusion_control.perceived_dir_z.get();
+            let dir = Vec3::new(px, py, pz);
+            if dir.length_squared() > 0.001 {
+                dir.normalize()
+            } else {
+                (emitter_transform.translation() - listener_pos).normalize_or_zero()
+            }
+        } else {
+            (emitter_transform.translation() - listener_pos).normalize_or_zero()
+        };
 
+        let dist = listener_pos.distance(emitter_transform.translation());
         const MIN_FAR_EAR_GAIN: f32 = 0.25;
 
-        let (pan, left_gain, right_gain) = if dist < 0.001 {
+        let (_pan, left_gain, right_gain) = if dist < 0.001 {
             let center_gain = MIN_FAR_EAR_GAIN.lerp(1.0, std::f32::consts::FRAC_1_SQRT_2);
             (0.0, center_gain, center_gain)
         } else {
-            let dir = to_emitter / dist;
-            let pan = dir.dot(*list_right);
-
+            let pan = perceived_dir.dot(*list_right);
             let normalized_pan = (pan + 1.0) / 2.0;
 
             let left_gain =
@@ -738,5 +784,51 @@ mod tests {
         let mat = app.world().entity(entity).get::<AcousticMaterial>();
         assert!(mat.is_some());
         assert_eq!(mat.unwrap().low_transmission, 0.4);
+    }
+
+    #[test]
+    fn test_diffraction_panning_bending() {
+        let mut app = App::new();
+        app.add_systems(Update, sonus_panning_system);
+
+        let listener_transform = Transform::from_xyz(0.0, 0.0, 0.0);
+        app.world_mut().spawn((
+            SonusListener,
+            listener_transform,
+            GlobalTransform::from(listener_transform),
+        ));
+
+        let emitter = SonusEmitter::new("sound.wav")
+            .with_panning()
+            .with_occlusion();
+
+        // Simulate occlusion system setting a bent perceived direction (pointing right: +X)
+        if let Some(occ) = &emitter.control.occlusion_control {
+            occ.perceived_dir_x.set(1.0);
+            occ.perceived_dir_y.set(0.0);
+            occ.perceived_dir_z.set(0.0);
+        }
+
+        let emitter_transform = Transform::from_xyz(0.0, 0.0, -10.0);
+        let emitter_entity = app
+            .world_mut()
+            .spawn((
+                emitter,
+                emitter_transform,
+                GlobalTransform::from(emitter_transform),
+            ))
+            .id();
+
+        app.update();
+
+        let emitter_ref = app
+            .world()
+            .entity(emitter_entity)
+            .get::<SonusEmitter>()
+            .unwrap();
+        let panning = emitter_ref.control.panning_control.as_ref().unwrap();
+
+        // Since perceived direction was bent to +X (Right), right ear gain should be higher than left
+        assert!(panning.right_gain.get() > panning.left_gain.get());
     }
 }

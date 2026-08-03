@@ -37,11 +37,14 @@ impl SonusControl {
     }
 }
 
-/// Parameters for real-time 3-band occlusion filtering.
+/// Parameters for real-time 3-band occlusion filtering and perceived diffraction direction.
 pub struct OcclusionControl {
     pub gain_low: AudioParam,
     pub gain_mid: AudioParam,
     pub gain_high: AudioParam,
+    pub perceived_dir_x: AudioParam,
+    pub perceived_dir_y: AudioParam,
+    pub perceived_dir_z: AudioParam,
 }
 
 /// Parameters for real-time distance attenuation.
